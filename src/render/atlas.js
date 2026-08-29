@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 
 import * as THREE from '../../vendor/three.module.js';
-import { generateTextures, TEXTURE_NAMES } from './textures.js';
+import { generateTextures } from './textures.js';
 import { blocks, blockByName } from '../world/blocks.js';
 import { items } from '../world/items.js';
 

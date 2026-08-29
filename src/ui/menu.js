@@ -4,10 +4,10 @@
 // ---------------------------------------------------------------------------
 
 import { el, clear, $, esc } from './dom.js';
-import { listWorlds, createWorld, deleteWorld, duplicateWorld, updateMeta, getMeta, storageUsage } from '../save/storage.js';
+import { listWorlds, createWorld, deleteWorld, duplicateWorld, getMeta, storageUsage } from '../save/storage.js';
 import { fmtDate, fmtTime, clamp } from '../core/mathx.js';
 import { hashSeed } from '../core/rng.js';
-import { LAYER_NAMES, W_LAYERS } from '../world/constants.js';
+import { layerName, W_LAYERS, W_MID } from '../world/constants.js';
 import { sfx, setVolume } from '../audio/sfx.js';
 
 const TIPS = [
@@ -349,7 +349,7 @@ export class Menu {
   // -------------------------------------------------------------------------
   showCreate() {
     this.clearScreen();
-    const state = { name: this.suggestName(), seed: '', mode: 'survival', depth: 7 };
+    const state = { name: this.suggestName(), seed: '', mode: 'survival' };
     this.makeShell((card) => {
       card.appendChild(el('h2', null, 'Create a world'));
       card.appendChild(el('div', 'subtitle', 'A name, a seed, and how deep the fourth dimension runs.'));
@@ -376,14 +376,12 @@ export class Menu {
         <div class="hint" id="cw-mode-hint">Empty inventory, real damage, real hunger. Everything must be found or made.</div>`;
       body.appendChild(modeF);
 
-      const depthF = el('div', 'field');
-      depthF.innerHTML = `<label>Hyper-depth</label>
-        <div class="set-row"><input type="range" id="cw-depth" min="3" max="7" step="2" value="7"><div class="val" id="cw-depth-v">7</div></div>
-        <div class="hint">How many layers the fourth dimension has. Fewer layers means a tighter, faster world; seven is the full experience.</div>`;
-      body.appendChild(depthF);
-
       const preview = el('div', 'field');
-      preview.innerHTML = `<label>Layer stack</label><div id="cw-layers" style="display:flex;gap:4px"></div>`;
+      preview.innerHTML = `<label>The fourth axis</label>
+        <div id="cw-layers" style="display:flex;gap:1px;height:34px;align-items:flex-end"></div>
+        <div class="hint">Every world has ${W_LAYERS} hyper-layers, ORIGIN at the centre.
+        Hold <b>F</b> and scroll to slide your cross-section along them; the terrain flows because
+        neighbouring layers are close together, not because it is being redrawn.</div>`;
       body.appendChild(preview);
 
       card.appendChild(body);
@@ -394,7 +392,7 @@ export class Menu {
         onClick: () => {
           const name = $('#cw-name').value.trim() || 'New World';
           const seed = $('#cw-seed').value.trim() || String(Math.floor(Math.random() * 2147483647));
-          const meta = createWorld({ name, seed, mode: state.mode, wDepth: state.depth });
+          const meta = createWorld({ name, seed, mode: state.mode, wDepth: W_LAYERS });
           this.app.startWorld(meta.id);
         },
       }));
@@ -405,16 +403,15 @@ export class Menu {
       const renderLayers = () => {
         const host = $('#cw-layers');
         clear(host);
-        const n = state.depth;
-        const mid = (W_LAYERS - 1) >> 1;
         for (let i = 0; i < W_LAYERS; i++) {
-          const active = Math.abs(i - mid) <= (n - 1) / 2;
-          const d = el('div');
-          d.style.cssText = `flex:1;height:26px;border:1px solid ${active ? 'var(--cyan-dim)' : 'var(--slate-600)'};` +
-            `background:${active ? 'rgba(30,80,105,.5)' : 'rgba(10,14,24,.5)'};display:grid;place-items:center;` +
-            `font-size:8px;letter-spacing:.08em;color:${active ? 'var(--cyan)' : 'var(--slate-400)'}`;
-          d.textContent = LAYER_NAMES[i].split(' ')[0].slice(0, 4);
-          host.appendChild(d);
+          const d = Math.abs(i - W_MID);
+          const bar = el('div');
+          const h = 34 - d * 0.55;
+          const isMid = i === W_MID;
+          bar.style.cssText = `flex:1;height:${h}px;` +
+            `background:${isMid ? 'var(--amber)' : `rgba(110,231,255,${0.6 - d * 0.022})`};`;
+          bar.title = layerName(i);
+          host.appendChild(bar);
         }
       };
       renderLayers();
@@ -432,12 +429,7 @@ export class Menu {
           : 'Empty inventory, real damage, real hunger. Everything must be found or made.';
         sfx.click();
       });
-      const depth = $('#cw-depth');
-      depth.addEventListener('input', () => {
-        state.depth = Number(depth.value);
-        $('#cw-depth-v').textContent = state.depth;
-        renderLayers();
-      });
+
     });
     this.buttonsEl.appendChild(this.btn('Back', { onClick: () => this.showSingleplayer() }));
   }
@@ -531,8 +523,7 @@ export class Menu {
       const vid = section('Video');
       slider(vid, 'Field of view', 'fov', 55, 110, 1, (v) => v + '°', () => this.app.applySettings());
       slider(vid, 'Render distance', 'renderDistance', 2, 8, 1, (v) => v + ' ch');
-      slider(vid, 'Ghost layer range', 'ghostDistance', 0, 5, 1, (v) => v + ' ch');
-      check(vid, 'Show neighbouring hyper-layers while phasing', 'ghostSlices');
+      check(vid, 'Hyper-tape while travelling', 'hyperTape');
       check(vid, 'Smooth lighting', 'smoothLighting');
       check(vid, 'Particles', 'particles');
       check(vid, 'View bob', 'viewBob');
@@ -541,7 +532,7 @@ export class Menu {
 
       const ctl = section('Controls');
       slider(ctl, 'Mouse sensitivity', 'mouseSensitivity', 0.0004, 0.006, 0.0001, (v) => (v * 1000).toFixed(1));
-      slider(ctl, 'Phase sensitivity', 'phaseSensitivity', 0.001, 0.014, 0.0002, (v) => (v * 1000).toFixed(1));
+      slider(ctl, 'Phase per notch', 'phaseScrollStep', 0.25, 3, 0.25, (v) => v.toFixed(2) + ' L');
       check(ctl, 'Invert vertical look', 'invertY');
       grid.appendChild(ctl);
 
@@ -619,7 +610,7 @@ export class Menu {
     p.appendChild(el('h2', null, 'Paused'));
     const meta = getMeta(game.worldId);
     p.appendChild(el('div', 'sub',
-      `${meta ? meta.name : 'World'} · seed ${meta ? meta.seed : '—'} · ${LAYER_NAMES[game.player.slice]}`));
+      `${meta ? meta.name : 'World'} · seed ${meta ? meta.seed : '—'} · ${layerName(game.player.slice)}`));
     const bs = el('div', 'pause-buttons');
     bs.appendChild(this.btn('Resume', { cls: 'primary', onClick: () => this.app.resume() }));
     bs.appendChild(this.btn('Codex', { onClick: () => this.app.openCodexFromPause() }));
@@ -642,7 +633,7 @@ export class Menu {
     const stats = el('div', 'stats');
     stats.innerHTML = `Blocks mined <b>${st.blocksMined}</b> &nbsp;·&nbsp; placed <b>${st.blocksPlaced}</b><br>
       Phase shifts <b>${st.phaseShifts}</b> &nbsp;·&nbsp; distance <b>${Math.round(st.distance)}m</b><br>
-      Layer at death <b class="accent-cyan">${LAYER_NAMES[game.player.slice]}</b>`;
+      Layer at death <b class="accent-cyan">${layerName(game.player.slice)}</b>`;
     p.appendChild(stats);
     const bs = el('div', 'pause-buttons');
     bs.appendChild(this.btn('Respawn', { cls: 'primary', onClick: () => this.app.respawn() }));

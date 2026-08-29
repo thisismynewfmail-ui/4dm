@@ -42,8 +42,15 @@ const target = await page.evaluate(() => {
 });
 ok('raycast finds the block ahead', !!target && target.z === setup.z, JSON.stringify(target));
 
+// Hold the button until the block actually breaks. Breaking is driven by frame
+// dt, and a software-GL run can spend half a second inside one chunk build, so
+// a fixed wait measures the host's load rather than the mining code.
 await page.mouse.down({ button: 'left' });
-await page.waitForTimeout(2500);
+for (let i = 0; i < 60; i++) {
+  const gone = await page.evaluate((st) => window.__4dmc.game.world.getBlock(st.x, st.y, st.z, st.w) === 0, setup);
+  if (gone) break;
+  await page.waitForTimeout(250);
+}
 await page.mouse.up({ button: 'left' });
 await page.waitForTimeout(600);
 const mined = await page.evaluate((s) => {
@@ -78,25 +85,97 @@ const placedInfo = await page.evaluate(async (st) => {
 ok('right click places a block', placedInfo.placed >= 1 && placedInfo.front, JSON.stringify(placedInfo));
 ok('placing consumes the stack', placedInfo.left === 19, placedInfo.left);
 
-// phase with F + mouse move
-const w0 = await page.evaluate(() => window.__4dmc.game.player.w);
+// --- movement frame: each key must move along the camera's own basis -------
+const moveCheck = await page.evaluate(async () => {
+  const a = window.__4dmc, g = a.game, p = g.player;
+  p.gameMode = 'creative'; p.flying = true;      // fly so terrain cannot deflect us
+  p.y = 74;                                      // and do it in open air
+  const homeX = p.x, homeZ = p.z;
+  const results = {};
+  const keys = { forward: 'W', back: 'S', left: 'A', right: 'D' };
+  for (const [k, label] of Object.entries(keys)) {
+    for (const yaw of [0, Math.PI / 2, 2.4, -1.3]) {
+      p.yaw = yaw; p.pitch = 0;
+      p.x = homeX; p.z = homeZ; p.y = 74; p.vx = 0; p.vz = 0; p.vy = 0;
+      const input = { forward: false, back: false, left: false, right: false,
+        jump: false, sneak: false, sprint: false, phase: false, mine: false, use: false, phaseNotches: 0 };
+      input[k] = true;
+      for (let i = 0; i < 30; i++) p.update(1 / 60, input, a.settings, g);
+      // the camera's own basis
+      const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+      const rx = Math.cos(yaw), rz = -Math.sin(yaw);
+      const want = { forward: [fx, fz], back: [-fx, -fz], left: [-rx, -rz], right: [rx, rz] }[k];
+      const dx = p.x - homeX, dz = p.z - homeZ;
+      const len = Math.hypot(dx, dz);
+      const dot = len > 0.05 ? (dx / len) * want[0] + (dz / len) * want[1] : 0;
+      results[`${label}@${yaw.toFixed(2)}`] = { moved: +len.toFixed(2), align: +dot.toFixed(3) };
+    }
+  }
+  return results;
+});
+const bad = Object.entries(moveCheck).filter(([, v]) => v.moved < 0.4 || v.align < 0.999);
+ok('W A S D move along the camera basis at every yaw', bad.length === 0,
+  bad.length ? JSON.stringify(bad.slice(0, 3)) : `${Object.keys(moveCheck).length} cases, min align ` +
+    Math.min(...Object.values(moveCheck).map((v) => v.align)).toFixed(4));
+await page.evaluate(() => {
+  const p = window.__4dmc.game.player;
+  p.gameMode = 'survival'; p.flying = false; p.yaw = 0; p.pitch = 0;
+});
+
+// phase with F + the wheel
+const w0 = await page.evaluate(() => {
+  const p = window.__4dmc.game.player;
+  // clear a pocket ahead in W so the drive is not legitimately blocked
+  const W = window.__4dmc.game.world;
+  const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
+  for (let lw = p.slice; lw <= p.slice + 4; lw++) {
+    for (let dy = 0; dy < 3; dy++) for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      W.setBlock(x + dx, y + dy, z + dz, lw, 0);
+    }
+    W.setBlock(x, y - 1, z, lw, 2);
+  }
+  return p.w;
+});
 await page.keyboard.down('f');
 await page.waitForTimeout(200);
-for (let i = 0; i < 40; i++) { await page.mouse.move(500, 350 - i * 4); await page.waitForTimeout(12); }
-await page.waitForTimeout(400);
+
+// Looking around must keep working while the drive is engaged.
+// Headless Chromium under pointer lock reports each CDP move as the absolute
+// position followed by its negation (a net-zero pair the game rightly ignores
+// as a spike), so drive the handler with the kind of event a real mouse sends.
+const look = await page.evaluate(async () => {
+  const p = window.__4dmc.game.player;
+  const before = { yaw: p.yaw, pitch: p.pitch };
+  for (let i = 0; i < 4; i++) {
+    document.dispatchEvent(new MouseEvent('mousemove', { movementX: 14, movementY: -9, bubbles: true }));
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  return { before, after: { yaw: p.yaw, pitch: p.pitch } };
+});
+ok('mouse still looks around while F is held',
+  look.before.yaw !== look.after.yaw && look.before.pitch !== look.after.pitch,
+  `yaw ${look.before.yaw.toFixed(3)} -> ${look.after.yaw.toFixed(3)}, ` +
+  `pitch ${look.before.pitch.toFixed(3)} -> ${look.after.pitch.toFixed(3)}`);
+
+for (let i = 0; i < 3; i++) {
+  await page.mouse.wheel(0, -100);
+  await page.waitForTimeout(260);
+}
+await page.waitForTimeout(900);
 const during = await page.evaluate(() => {
   const p = window.__4dmc.game.player;
-  return { w: p.w, stability: p.stability, held: p.phaseHeld };
+  return { w: p.w, target: p.wTarget, stability: p.stability, held: p.phaseHeld };
 });
-ok('F + mouse moves through W', Math.abs(during.w - w0) > 0.05, `w ${w0} -> ${during.w.toFixed(3)}`);
+ok('F + wheel travels through W', during.w - w0 > 0.4, `w ${w0} -> ${during.w.toFixed(3)} (target ${during.target})`);
+ok('the wheel travels toward ANA when scrolled up', during.target > w0, during.target);
 ok('phasing drains stability', during.stability < 100, during.stability.toFixed(1));
 await page.keyboard.up('f');
-await page.waitForTimeout(1200);
+await page.waitForTimeout(2500);
 const after = await page.evaluate(() => {
   const p = window.__4dmc.game.player;
-  return { w: p.w, isInt: Math.abs(p.w - Math.round(p.w)) < 1e-6 };
+  return { w: p.w, isInt: Math.abs(p.w - Math.round(p.w)) < 1e-3 };
 });
-ok('releasing F snaps to a layer', after.isInt, after.w);
+ok('releasing F settles onto a whole layer', after.isInt, after.w);
 
 // hostile mob damages the player
 const dmg = await page.evaluate(async () => {

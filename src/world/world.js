@@ -1,6 +1,10 @@
 // ---------------------------------------------------------------------------
-// World: chunk storage, 4D block access, incremental lighting, containers and
-// the edit journal used for saving.
+// World: sparse 4D chunk storage, block access, incremental lighting,
+// containers and the edit journal used for saving.
+//
+// The fourth axis has 41 layers but a chunk only allocates the slices you
+// actually visit, so travelling in W costs memory proportional to where you
+// have been rather than to the size of the hyperworld.
 // ---------------------------------------------------------------------------
 
 import { Chunk } from './chunk.js';
@@ -8,7 +12,7 @@ import { WorldGen, BIOMES } from './worldgen.js';
 import { makeNoiseSet } from '../core/noise.js';
 import { hashSeed } from '../core/rng.js';
 import {
-  CX, CZ, WORLD_H, W_LAYERS, W_MID, SEA_LEVEL, idx, colOffset, chunkKey, blockKey,
+  CX, CZ, WORLD_H, W_LAYERS, W_MID, SEA_LEVEL, sIdx, colOffset, chunkKey, blockKey,
 } from './constants.js';
 import {
   B, IS_OPAQUE, IS_SOLID, LIGHT_EMIT, LIGHT_FILT, IS_LIQUID, blocks, block,
@@ -30,11 +34,10 @@ export class World {
     this.edits = new Map();        // "x,y,z,w" -> block id  (save journal)
     this.editsByChunk = new Map(); // "cx,cz" -> Map(localKey -> id)
     this.dirtyMeshes = new Set();  // "cx,cz,w"
-    this.time = opts.time != null ? opts.time : 6000; // 0..24000
-    this.genBudgetMs = 6;
+    this.time = opts.time != null ? opts.time : 6000;
     this._lastChunk = null;
     this._lastKey = '';
-    this.stats = { chunks: 0, slicesGen: 0, slicesLit: 0 };
+    this.stats = { chunks: 0, slices: 0, slicesGen: 0, slicesLit: 0 };
   }
 
   // --- chunk access --------------------------------------------------------
@@ -61,7 +64,8 @@ export class World {
   ensureSlice(cx, cz, w) {
     if (w < 0 || w >= W_LAYERS) return null;
     const c = this.getChunk(cx, cz, true);
-    if (!c.isGen(w)) {
+    const s = c.slice(w, true);
+    if (!s.gen) {
       this.gen.generateSlice(c, w);
       this._applyEdits(c, w);
       this.stats.slicesGen++;
@@ -74,13 +78,24 @@ export class World {
     return !!(c && c.isGen(w));
   }
 
+  /** Drop slices far from `keepW` across every loaded chunk. */
+  trimSlices(keepW) {
+    let total = 0;
+    for (const [, c] of this.chunks) {
+      c.evict(keepW);
+      total += c.slices.size;
+    }
+    this.stats.slices = total;
+  }
+
   _applyEdits(chunk, w) {
     const m = this.editsByChunk.get(chunkKey(chunk.cx, chunk.cz));
     if (!m) return;
+    const sl = chunk.slice(w, true);
     for (const [k, id] of m) {
-      const [lx, y, lz, ew] = k.split(',').map(Number);
-      if (ew !== w) continue;
-      chunk.set(lx, y, lz, w, id);
+      const c = k.indexOf(':');
+      if (Number(k.slice(0, c)) !== w) continue;
+      sl.blocks[Number(k.slice(c + 1))] = id;
     }
   }
 
@@ -89,16 +104,19 @@ export class World {
     if (y < 0 || y >= WORLD_H || w < 0 || w >= W_LAYERS) return 0;
     const cx = x >> 4, cz = z >> 4;
     const c = this.chunks.get(chunkKey(cx, cz));
-    if (!c || !c.isGen(w)) return 0;
-    return c.blocks[idx(x - (cx << 4), y, z - (cz << 4), w)];
+    if (!c) return 0;
+    const s = c.slices.get(w);
+    if (!s || !s.gen) return 0;
+    return s.blocks[sIdx(x - (cx << 4), y, z - (cz << 4))];
   }
 
-  /** Like getBlock but generates the slice on demand (used by raycasts). */
+  /** Like getBlock but generates the slice on demand (raycasts, physics). */
   getBlockGen(x, y, z, w) {
     if (y < 0 || y >= WORLD_H || w < 0 || w >= W_LAYERS) return 0;
     const cx = x >> 4, cz = z >> 4;
     const c = this.ensureSlice(cx, cz, w);
-    return c.blocks[idx(x - (cx << 4), y, z - (cz << 4), w)];
+    if (!c) return 0;
+    return c.slices.get(w).blocks[sIdx(x - (cx << 4), y, z - (cz << 4))];
   }
 
   isSolid(x, y, z, w) { return IS_SOLID[this.getBlock(x, y, z, w)] === 1; }
@@ -108,11 +126,12 @@ export class World {
     if (y < 0 || y >= WORLD_H || w < 0 || w >= W_LAYERS) return false;
     const cx = x >> 4, cz = z >> 4;
     const c = this.ensureSlice(cx, cz, w);
+    const sl = c.slices.get(w);
     const lx = x - (cx << 4), lz = z - (cz << 4);
-    const i = idx(lx, y, lz, w);
-    const old = c.blocks[i];
+    const i = sIdx(lx, y, lz);
+    const old = sl.blocks[i];
     if (old === id) return false;
-    c.blocks[i] = id;
+    sl.blocks[i] = id;
 
     // journal for saving
     const k = blockKey(x, y, z, w);
@@ -120,17 +139,17 @@ export class World {
     const ck = chunkKey(cx, cz);
     let m = this.editsByChunk.get(ck);
     if (!m) { m = new Map(); this.editsByChunk.set(ck, m); }
-    m.set(`${lx},${y},${lz},${w}`, id);
+    m.set(`${w}:${i}`, id);
 
     if (id === 0) { this.containers.delete(k); this.facings.delete(k); }
 
     // heightmap maintenance
-    const hm = c.hAt(lx, lz, w);
-    if (id !== 0 && y > hm) c.setH(lx, lz, w, y);
+    const hm = sl.heightmap[lx * CZ + lz];
+    if (id !== 0 && y > hm) sl.heightmap[lx * CZ + lz] = y;
     else if (id === 0 && y === hm) {
       let ny = y - 1;
-      while (ny > 0 && c.get(lx, ny, lz, w) === 0) ny--;
-      c.setH(lx, lz, w, ny);
+      while (ny > 0 && sl.blocks[sIdx(lx, ny, lz)] === 0) ny--;
+      sl.heightmap[lx * CZ + lz] = ny;
     }
 
     if (!opts.noLight) this._relightAt(x, y, z, w, old, id);
@@ -138,11 +157,7 @@ export class World {
     return true;
   }
 
-  markDirty(cx, cz, w) {
-    const c = this.chunks.get(chunkKey(cx, cz));
-    if (c) c.dirty[w] = 1;
-    this.dirtyMeshes.add(`${cx},${cz},${w}`);
-  }
+  markDirty(cx, cz, w) { this.dirtyMeshes.add(`${cx},${cz},${w}`); }
 
   markDirtyAround(x, y, z, w) {
     const cx = x >> 4, cz = z >> 4;
@@ -152,9 +167,6 @@ export class World {
     if (lx === 15) this.markDirty(cx + 1, cz, w);
     if (lz === 0) this.markDirty(cx, cz - 1, w);
     if (lz === 15) this.markDirty(cx, cz + 1, w);
-    // neighbouring hyper-layers show this slice as a ghost, so they restyle too
-    if (w > 0) this.markDirty(cx, cz, w - 1);
-    if (w < W_LAYERS - 1) this.markDirty(cx, cz, w + 1);
   }
 
   // --- orientation & containers -------------------------------------------
@@ -173,7 +185,7 @@ export class World {
   heightAt(x, z, w) {
     const cx = x >> 4, cz = z >> 4;
     const c = this.chunks.get(chunkKey(cx, cz));
-    if (c && c.isGen(w)) {
+    if (c) {
       const h = c.hAt(x - (cx << 4), z - (cz << 4), w);
       if (h >= 0) return h;
     }
@@ -193,8 +205,10 @@ export class World {
     if (y >= WORLD_H) return 0xf0;
     const cx = x >> 4, cz = z >> 4;
     const c = this.chunks.get(chunkKey(cx, cz));
-    if (!c || !c.isGen(w)) return 0;
-    return c.light[idx(x - (cx << 4), y, z - (cz << 4), w)];
+    if (!c) return 0;
+    const s = c.slices.get(w);
+    if (!s || !s.gen) return 0;
+    return s.light[sIdx(x - (cx << 4), y, z - (cz << 4))];
   }
   getSky(x, y, z, w) { return (this.getLightRaw(x, y, z, w) >> 4) & 15; }
   getBlockLight(x, y, z, w) { return this.getLightRaw(x, y, z, w) & 15; }
@@ -203,51 +217,54 @@ export class World {
     if (y < 0 || y >= WORLD_H) return;
     const cx = x >> 4, cz = z >> 4;
     const c = this.chunks.get(chunkKey(cx, cz));
-    if (!c || !c.isGen(w)) return;
-    c.light[idx(x - (cx << 4), y, z - (cz << 4), w)] = v;
+    if (!c) return;
+    const s = c.slices.get(w);
+    if (!s || !s.gen) return;
+    s.light[sIdx(x - (cx << 4), y, z - (cz << 4))] = v;
   }
 
   /** Compute lighting for one chunk-slice from scratch, pulling in neighbours. */
   ensureLit(cx, cz, w) {
     const c = this.ensureSlice(cx, cz, w);
-    if (c.isLit(w)) return c;
-    c.markLit(w);
+    const sl = c.slices.get(w);
+    if (sl.lit) return c;
+    sl.lit = true;
     this.stats.slicesLit++;
 
     const ox = cx << 4, oz = cz << 4;
-    const base = w * CX * CZ * WORLD_H;
+    const blocksArr = sl.blocks, lightArr = sl.light;
 
     // 1. vertical skylight
     for (let lx = 0; lx < CX; lx++) {
       for (let lz = 0; lz < CZ; lz++) {
-        const col = base + colOffset(lx, lz);
+        const col = colOffset(lx, lz);
         let lvl = 15;
         for (let y = WORLD_H - 1; y >= 0; y--) {
-          const f = LIGHT_FILT[c.blocks[col + y]];
+          const f = LIGHT_FILT[blocksArr[col + y]];
           if (f >= 15) lvl = 0;
           else if (f > 0) lvl = Math.max(0, lvl - f);
-          c.light[col + y] = (lvl << 4) | (c.light[col + y] & 15);
+          lightArr[col + y] = (lvl << 4) | (lightArr[col + y] & 15);
           if (lvl === 0) {
-            for (let yy = y - 1; yy >= 0; yy--) c.light[col + yy] = c.light[col + yy] & 15;
+            for (let yy = y - 1; yy >= 0; yy--) lightArr[col + yy] &= 15;
             break;
           }
         }
       }
     }
 
-    // 2. horizontal skylight spread + 3. block light, both as one BFS each
+    // 2. horizontal skylight spread + block light, one BFS each
     const skyQ = [];
     const blkQ = [];
     for (let lx = 0; lx < CX; lx++) {
       for (let lz = 0; lz < CZ; lz++) {
-        const col = base + colOffset(lx, lz);
+        const col = colOffset(lx, lz);
         for (let y = 0; y < WORLD_H; y++) {
-          const id = c.blocks[col + y];
-          const s = (c.light[col + y] >> 4) & 15;
+          const id = blocksArr[col + y];
+          const s = (lightArr[col + y] >> 4) & 15;
           if (s > 1) skyQ.push(ox + lx, y, oz + lz, s);
           const e = LIGHT_EMIT[id];
           if (e > 0) {
-            c.light[col + y] = (c.light[col + y] & 0xf0) | e;
+            lightArr[col + y] = (lightArr[col + y] & 0xf0) | e;
             blkQ.push(ox + lx, y, oz + lz, e);
           }
         }
@@ -270,8 +287,7 @@ export class World {
     }
     this._spread(skyQ, w, true);
     this._spread(blkQ, w, false);
-    c.dirty[w] = 1;
-    this.dirtyMeshes.add(`${cx},${cz},${w}`);
+    this.markDirty(cx, cz, w);
     return c;
   }
 
@@ -289,20 +305,19 @@ export class World {
         if (ny < 0 || ny >= WORLD_H) continue;
         const cx = nx >> 4, cz = nz >> 4;
         const c = this.chunks.get(chunkKey(cx, cz));
-        if (!c || !c.isGen(w)) continue;
-        const i = idx(nx - (cx << 4), ny, nz - (cz << 4), w);
-        const id = c.blocks[i];
-        const filt = LIGHT_FILT[id];
+        if (!c) continue;
+        const s = c.slices.get(w);
+        if (!s || !s.gen) continue;
+        const i = sIdx(nx - (cx << 4), ny, nz - (cz << 4));
+        const filt = LIGHT_FILT[s.blocks[i]];
         if (filt >= 15) continue;
         let next = lvl - 1 - Math.max(0, filt);
-        // sunlight falls straight down without loss
         if (isSky && d[1] === -1 && lvl === 15 && filt === 0) next = 15;
         if (next <= 0) continue;
-        const cur = (c.light[i] >> shift) & 15;
+        const cur = (s.light[i] >> shift) & 15;
         if (cur >= next) continue;
-        c.light[i] = (c.light[i] & mask) | (next << shift);
-        c.dirty[w] = 1;
-        this.dirtyMeshes.add(`${cx},${cz},${w}`);
+        s.light[i] = (s.light[i] & mask) | (next << shift);
+        this.markDirty(cx, cz, w);
         q.push(nx, ny, nz, next);
       }
     }
@@ -312,8 +327,6 @@ export class World {
   _relightAt(x, y, z, w, oldId, newId) {
     const skyRemove = [], blkRemove = [];
     const oldSky = this.getSky(x, y, z, w), oldBlk = this.getBlockLight(x, y, z, w);
-
-    // the cell itself
     const emit = LIGHT_EMIT[newId];
     this._setLightRaw(x, y, z, w, 0);
     if (oldSky > 0) skyRemove.push(x, y, z, oldSky);
@@ -321,10 +334,8 @@ export class World {
     this._unspread(skyRemove, w, true);
     this._unspread(blkRemove, w, false);
 
-    // re-seed
     const skyQ = [], blkQ = [];
     if (LIGHT_FILT[newId] < 15) {
-      // sunlight from above
       let above = this.getSky(x, y + 1, z, w);
       if (y + 1 >= WORLD_H) above = 15;
       const filt = LIGHT_FILT[newId];
@@ -336,7 +347,6 @@ export class World {
       this._setLightRaw(x, y, z, w, (cur & 0xf0) | emit);
       blkQ.push(x, y, z, emit);
     }
-    // pull from all neighbours
     for (let n = 0; n < 6; n++) {
       const d = NEIGHBORS[n];
       const nx = x + d[0], ny = y + d[1], nz = z + d[2];
@@ -367,17 +377,18 @@ export class World {
         if (ny < 0 || ny >= WORLD_H) continue;
         const cx = nx >> 4, cz = nz >> 4;
         const c = this.chunks.get(chunkKey(cx, cz));
-        if (!c || !c.isGen(w)) continue;
-        const i = idx(nx - (cx << 4), ny, nz - (cz << 4), w);
-        const cur = (c.light[i] >> shift) & 15;
+        if (!c) continue;
+        const s = c.slices.get(w);
+        if (!s || !s.gen) continue;
+        const i = sIdx(nx - (cx << 4), ny, nz - (cz << 4));
+        const cur = (s.light[i] >> shift) & 15;
         if (cur === 0) continue;
         const straightDown = isSky && d[1] === -1 && lvl === 15;
         if (cur < lvl || straightDown) {
-          c.light[i] = c.light[i] & mask;
-          c.dirty[w] = 1;
-          this.dirtyMeshes.add(`${cx},${cz},${w}`);
+          s.light[i] &= mask;
+          this.markDirty(cx, cz, w);
           q.push(nx, ny, nz, cur === 0 ? lvl : cur);
-        } else if (cur >= lvl) {
+        } else {
           refill.push(nx, ny, nz, cur);
         }
       }
@@ -386,18 +397,18 @@ export class World {
   }
 
   // --- convenience ---------------------------------------------------------
-  /** Combined 0..1 light used for shading, including a soft bleed across W. */
+  /** Combined 0..1 light used for entity shading, with a soft bleed across W. */
   lightValue(x, y, z, w, bleed = true) {
     const raw = this.getLightRaw(x, y, z, w);
     let sky = (raw >> 4) & 15, blk = raw & 15;
     if (bleed) {
-      for (const dw of [-1, 1]) {
-        const nw = w + dw;
-        if (nw < 0 || nw >= W_LAYERS) continue;
-        const c = this.chunks.get(chunkKey(x >> 4, z >> 4));
-        if (!c || !c.isLit(nw)) continue;
-        const r = this.getLightRaw(x, y, z, nw);
-        blk = Math.max(blk, ((r & 15) - 5));
+      const c = this.chunks.get(chunkKey(x >> 4, z >> 4));
+      if (c) {
+        for (const dw of [-1, 1]) {
+          const nw = w + dw;
+          if (nw < 0 || nw >= W_LAYERS || !c.isLit(nw)) continue;
+          blk = Math.max(blk, (this.getLightRaw(x, y, z, nw) & 15) - 4);
+        }
       }
     }
     const daylight = this.daylight();
@@ -413,13 +424,13 @@ export class World {
 
   /**
    * Find a safe surface spawn: dry land, three blocks of headroom, no canopy.
-   * If the origin of this hyper-layer is all ocean, the search walks along W
+   * If this hyper-layer is all ocean near the origin, the search walks along W
    * before it gives up — being able to step sideways in the fourth dimension
    * is, after all, the point.
    */
   findSpawn(w = W_MID, cxHint = 0, czHint = 0) {
     const layers = [w];
-    for (let d = 1; d < W_LAYERS; d++) {
+    for (let d = 1; d <= 8; d++) {
       if (w + d < W_LAYERS) layers.push(w + d);
       if (w - d >= 0) layers.push(w - d);
     }
@@ -427,7 +438,6 @@ export class World {
       const hit = this._scanSpawn(lw, cxHint, czHint);
       if (hit) return hit;
     }
-    // Nothing anywhere: raise a small island so the player always has ground.
     const x = cxHint, z = czHint, y = SEA_LEVEL + 1;
     this.ensureSlice(x >> 4, z >> 4, w);
     for (let dx = -2; dx <= 2; dx++) {
@@ -453,7 +463,6 @@ export class World {
         this.ensureSlice(x >> 4, z >> 4, w);
         const ground = this.getBlock(x, h, z, w);
         if (!IS_SOLID[ground] || IS_LIQUID[ground]) continue;
-        // three blocks of clear headroom — no canopy, no cave ceiling
         let clear = true;
         for (let dy = 1; dy <= 3; dy++) if (this.getBlock(x, h + dy, z, w) !== 0) { clear = false; break; }
         if (!clear) continue;
@@ -479,11 +488,13 @@ export class World {
       const k = part.slice(0, eq);
       const id = Number(part.slice(eq + 1));
       const [x, y, z, w] = k.split(',').map(Number);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z) || !Number.isFinite(w)) continue;
       this.edits.set(k, id);
-      const ck = chunkKey(x >> 4, z >> 4);
+      const cx = x >> 4, cz = z >> 4;
+      const ck = chunkKey(cx, cz);
       let m = this.editsByChunk.get(ck);
       if (!m) { m = new Map(); this.editsByChunk.set(ck, m); }
-      m.set(`${x - ((x >> 4) << 4)},${y},${z - ((z >> 4) << 4)},${w}`, id);
+      m.set(`${w}:${sIdx(x - (cx << 4), y, z - (cz << 4))}`, id);
     }
   }
 }

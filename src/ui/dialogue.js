@@ -1,6 +1,6 @@
 // NPC conversation and trading.
 
-import { el, clear, $, esc } from './dom.js';
+import { el, $ } from './dom.js';
 import { iconStyleString } from '../render/atlas.js';
 import { getItem } from '../world/items.js';
 import { sfx } from '../audio/sfx.js';
@@ -37,7 +37,7 @@ export class Dialogue {
     wrap.addEventListener('pointerdown', (e) => { if (e.target === wrap) this.close(); });
     const p = el('div', 'panel dialogue');
     p.appendChild(el('div', 'who', npc.name));
-    p.appendChild(el('div', 'role', npc.def.name));
+    p.appendChild(el('div', 'role', `${npc.def.name} \u00b7 ${npc.def.title}`));
 
     if (this.mode === 'talk') {
       p.appendChild(el('div', 'line', npc.greeting()));
@@ -51,7 +51,7 @@ export class Dialogue {
       acts.appendChild(b1); acts.appendChild(b2); acts.appendChild(b3);
       p.appendChild(acts);
     } else {
-      p.appendChild(el('div', 'line', 'Shards for goods. No refunds across layers.'));
+      p.appendChild(el('div', 'line', 'Shards for goods. Nothing crosses a layer twice.'));
       const list = el('div', 'trade-list');
       const inv = this.game.player.inventory;
       npc.def.trades.forEach((t, i) => {

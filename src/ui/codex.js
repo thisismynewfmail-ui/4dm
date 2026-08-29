@@ -1,6 +1,6 @@
 // The Codex — an in-game recipe browser. Discoverability is a feature.
 
-import { el, clear, $, esc } from './dom.js';
+import { el, clear, $ } from './dom.js';
 import { iconStyleString } from '../render/atlas.js';
 import { recipesFor, tagExample, smelting } from '../world/recipes.js';
 import { getItem } from '../world/items.js';

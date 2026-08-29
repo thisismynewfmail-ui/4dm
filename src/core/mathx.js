@@ -9,6 +9,17 @@ export function damp(current, target, lambda, dt) {
   return lerp(current, target, 1 - Math.exp(-lambda * dt));
 }
 
+/**
+ * Yaw convention, shared by the camera, the player and every creature:
+ * an object at yaw y faces (-sin y, 0, -cos y) — THREE's default -Z forward
+ * rotated about +Y. Deriving movement or facing any other way reflects the
+ * frame instead of rotating it.
+ */
+export const yawForwardX = (yaw) => -Math.sin(yaw);
+export const yawForwardZ = (yaw) => -Math.cos(yaw);
+/** The yaw that faces along the direction (dx, dz). */
+export const yawToward = (dx, dz) => Math.atan2(-dx, -dz);
+
 export function fmtTime(ms) {
   const s = Math.floor(ms / 1000);
   const h = Math.floor(s / 3600);

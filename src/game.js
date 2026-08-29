@@ -5,24 +5,24 @@
 import * as THREE from '../vendor/three.module.js';
 import { World } from './world/world.js';
 import { Player, MAX_STABILITY } from './entity/player.js';
-import { Mob, SPECIES, SPECIES_KEYS } from './entity/mobs.js';
+import { Mob, SPECIES, SPECIES_KEYS, MOB_W_RANGE } from './entity/mobs.js';
 import { NPC, PROFESSION_KEYS } from './entity/npcs.js';
 import { ItemEntity, setItemEntityMaterial } from './entity/itementity.js';
 import { TerrainRenderer } from './render/terrain.js';
 import { Sky } from './render/sky.js';
 import { Particles } from './render/particles.js';
-import { globalUniforms } from './render/voxelmat.js';
+import { globalUniforms, createEntityMaterial } from './render/voxelmat.js';
 import { HUD } from './ui/hud.js';
 import { InventoryUI } from './ui/inventory.js';
 import { Dialogue } from './ui/dialogue.js';
-import { Container, stack, cloneStack, HOTBAR, INV_SIZE } from './world/inventory.js';
-import { blocks, block, blockByName, B, IS_SOLID, IS_OPAQUE, RENDER_KIND, TIER } from './world/blocks.js';
+import { Container, stack, cloneStack, INV_SIZE } from './world/inventory.js';
+import { blocks, block, blockByName, B, IS_SOLID, RENDER_KIND } from './world/blocks.js';
 import { getItem, fuelValue, items } from './world/items.js';
 import { smeltMap } from './world/recipes.js';
-import { W_LAYERS, W_MID, WORLD_H, SEA_LEVEL, LAYER_NAMES, LAYER_TINT, blockKey } from './world/constants.js';
+import { W_LAYERS, W_MID, WORLD_H, SEA_LEVEL, layerName, blockKey } from './world/constants.js';
 import { clamp, damp } from './core/mathx.js';
 import { RNG, hash4 } from './core/rng.js';
-import { sfx } from './audio/sfx.js';
+import { sfx, phaseDroneStart, phaseDroneSet, phaseDroneStop } from './audio/sfx.js';
 
 const FACING_FROM_YAW = (yaw) => {
   // 0=-Z, 1=+X, 2=+Z, 3=-X  — the block's front faces the player
@@ -63,7 +63,7 @@ export class Game {
     this.sky = new Sky(this.scene);
     this.particles = new Particles(this.scene);
     this.particles.enabled = this.settings.particles;
-    setItemEntityMaterial(this.terrain.mats.solid.cutout);
+    setItemEntityMaterial(createEntityMaterial());
 
     // --- entities --------------------------------------------------------
     this.mobs = [];
@@ -98,10 +98,11 @@ export class Game {
     this.scene.add(this.highlight);
     this.scene.add(this.breakOverlay);
     this.riftCooldown = 0;
-    this.ghostReveal = 0;
-    this.revealTimer = 0;
+    this.trimTimer = 0;
+    this.lastAnnouncedLayer = -1;
     this.stepTimer = 0;
     this.phaseSoundTimer = 0;
+    this.phaseNoticeTimer = 0;
     this.thirdPerson = 0;
     this.hudHidden = false;
     this.debugOn = false;
@@ -111,7 +112,6 @@ export class Game {
     this.discovered = new Set(data.discovered || []);
     this.cameraShake = 0;
     this.catchUp = 0;
-    this.lastDominant = undefined;
 
     if (meta.mode === 'creative') this.player.flying = true;
     this.applySettings();
@@ -173,6 +173,16 @@ export class Game {
 
   restorePlayer(p) {
     const pl = this.player;
+    // Worlds saved before the fourth axis was refined hold a hyper-position on
+    // a coarser scale; drop those players at ORIGIN rather than somewhere
+    // arbitrary. Terrain regenerates from the seed either way.
+    const savedDepth = this.meta.wDepth || 0;
+    if (savedDepth !== W_LAYERS && p.w !== undefined) {
+      pl.w = W_MID;
+      pl.wTarget = W_MID;
+      if (p.spawn) p.spawn.w = W_MID;
+      p.anchorLayer = W_MID;
+    }
     pl.yaw = p.yaw || 0; pl.pitch = p.pitch || 0;
     pl.health = p.health != null ? p.health : 20;
     pl.food = p.food != null ? p.food : 20;
@@ -376,8 +386,8 @@ export class Game {
       if (d < radius) { best = e; bestT = proj; }
     };
     const pw = this.player.w;
-    for (const m of this.mobs) if (Math.abs(m.w - pw) < (m.def.dim === 4 ? m.hyperExtent : 0.9)) consider(m);
-    for (const n of this.npcs) if (Math.abs(n.w - pw) < 0.9) consider(n, 0.1);
+    for (const m of this.mobs) if (Math.abs(m.w - pw) < (m.def.dim === 4 ? m.hyperExtent : MOB_W_RANGE)) consider(m);
+    for (const n of this.npcs) if (Math.abs(n.w - pw) < MOB_W_RANGE) consider(n, 0.1);
     return best ? { entity: best, dist: bestT } : null;
   }
 
@@ -532,7 +542,7 @@ export class Game {
     if (it.name === 'phase_anchor') {
       p.spawnPoint = { x: p.x, y: p.y, z: p.z, w: p.slice };
       p.anchorLayer = p.slice;
-      this.hud.toast('Anchor set', `Respawn bound to ${LAYER_NAMES[p.slice]} at ${Math.floor(p.x)}, ${Math.floor(p.y)}, ${Math.floor(p.z)}.`);
+      this.hud.toast('Anchor set', `Respawn bound to ${layerName(p.slice)} at ${Math.floor(p.x)}, ${Math.floor(p.y)}, ${Math.floor(p.z)}.`);
       sfx.levelUp();
       return true;
     }
@@ -565,8 +575,8 @@ export class Game {
       const pb = p.aabb();
       const overlap = (a, b) => a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0 && a.z0 < b.z1 && a.z1 > b.z0;
       if (overlap(box, pb)) return false;
-      for (const m of this.mobs) if (Math.abs(m.w - p.w) < 0.6 && overlap(box, m.aabb())) return false;
-      for (const n of this.npcs) if (Math.abs(n.w - p.w) < 0.6 && overlap(box, n.aabb())) return false;
+      for (const m of this.mobs) if (Math.abs(m.w - p.w) < 1.2 && overlap(box, m.aabb())) return false;
+      for (const n of this.npcs) if (Math.abs(n.w - p.w) < 1.2 && overlap(box, n.aabb())) return false;
     }
     // plants need something to stand on
     if (bd.render === 'cross' && !IS_SOLID[this.world.getBlock(x, y - 1, z, w)]) return false;
@@ -704,7 +714,7 @@ export class Game {
       const r = 22 + Math.random() * 26;
       const x = Math.floor(p.x + Math.cos(ang) * r);
       const z = Math.floor(p.z + Math.sin(ang) * r);
-      const layerOffset = Math.random() < 0.34 ? (Math.random() < 0.5 ? -1 : 1) : 0;
+      const layerOffset = Math.random() < 0.4 ? Math.round((Math.random() - 0.5) * 8) : 0;
       const w = clamp(p.slice + layerOffset, 0, W_LAYERS - 1);
       if (!world.isSliceReady(x >> 4, z >> 4, w)) continue;
       const surface = world.heightAt(x, z, w);
@@ -778,7 +788,7 @@ export class Game {
           this.npcs.push(npc);
           this.entityGroup.add(npc.group);
         }
-        this.hud.toast('Settlement', `Layer-folk live nearby in ${LAYER_NAMES[w]}.`);
+        this.hud.toast('Settlement', `Layer-folk live nearby in ${layerName(w)}.`);
       }
     }
   }
@@ -822,28 +832,54 @@ export class Game {
   update(dt, input) {
     const p = this.player;
     this.world.tick(dt * 1000);
+    if (this.phaseNoticeTimer > 0) this.phaseNoticeTimer -= dt;
 
     // --- phase drive -------------------------------------------------------
     const wasPhasing = p.phaseHeld;
     p.phaseHeld = input.phase && !this.inventoryUI.isOpen() && !this.dialogue.isOpen();
-    if (p.phaseHeld && !wasPhasing) { sfx.phaseStart(); this.particles.phaseSpark(p.x, p.y, p.z, 16); }
-    if (!p.phaseHeld && wasPhasing) {
-      const before = p.w;
-      p.snapToLayer();
-      if (Math.abs(before - p.w) > 0.02) sfx.phaseEnd();
-      this.hud.toast('Hyper-layer', LAYER_NAMES[p.slice]);
+    if (p.phaseHeld && !wasPhasing) {
+      sfx.phaseStart();
+      phaseDroneStart();
+      this.particles.phaseSpark(p.x, p.y, p.z, 14);
     }
-    if (p.phaseHeld && input.phaseDelta !== 0) {
-      const res = p.phaseBy(input.phaseDelta, dt);
-      if (res === 'blocked') { sfx.phaseBlocked(); this.cameraShake = 0.2; }
-      else if (res === 'drained') { sfx.phaseBlocked(); p.damage(2, 'lost cohesion between layers'); }
-      else {
-        this.phaseSoundTimer -= Math.abs(input.phaseDelta);
-        if (this.phaseSoundTimer <= 0) { this.phaseSoundTimer = 0.16; sfx.phaseTick(); }
+    if (!p.phaseHeld && wasPhasing) {
+      phaseDroneStop();
+      // releasing settles onto the nearest whole layer, so the world is crisp
+      // and unambiguous whenever you are not actually travelling
+      p.snapToLayer();
+    }
+    if (input.phaseNotches !== 0) {
+      p.nudgePhase(input.phaseNotches);
+      input.phaseNotches = 0;
+    }
+
+    const wBefore = p.w;
+    const res = p.updatePhase(dt);
+    if (res === 'blocked') {
+      if (this.phaseNoticeTimer <= 0) {
+        this.phaseNoticeTimer = 3;
+        sfx.phaseBlocked();
+        this.cameraShake = 0.22;
+        this.particles.phaseSpark(p.x, p.y + 0.8, p.z, 10);
+        this.hud.toast('Phase refused', 'Solid matter occupies that layer. Move, then try again.', 'bad');
+      }
+    } else if (res === 'drained') {
+      if (this.phaseNoticeTimer <= 0) {
+        this.phaseNoticeTimer = 4;
+        sfx.phaseBlocked();
+        p.damage(1.5, 'lost cohesion between layers');
+        this.hud.toast('Stability spent', 'The drive cannot hold. Rest, or eat a Chrono Berry.', 'warn');
+      }
+    } else if (res === 'moving') {
+      this.phaseSoundTimer -= Math.abs(p.w - wBefore);
+      if (this.phaseSoundTimer <= 0) { this.phaseSoundTimer = 0.22; sfx.phaseTick(); }
+      if (p.slice !== this.lastAnnouncedLayer) {
+        this.lastAnnouncedLayer = p.slice;
+        if (this.settings.particles) this.particles.phaseSpark(p.x, p.y + 1, p.z, 4);
       }
     }
-    input.phaseDelta = 0;
     p.phaseAmount = damp(p.phaseAmount, p.phaseHeld ? 1 : 0, 9, dt);
+    if (p.phaseHeld) phaseDroneSet(p.phaseSpeed, p.w - Math.floor(p.w));
 
     // --- player ------------------------------------------------------------
     const uiOpen = this.inventoryUI.isOpen() || this.dialogue.isOpen();
@@ -856,13 +892,13 @@ export class Game {
       const inside = this.world.getBlock(Math.floor(p.x), Math.floor(p.y + 0.5), Math.floor(p.z), p.slice);
       if (inside === B.rift_block) {
         const dir = p.slice >= W_LAYERS - 1 ? -1 : (p.slice <= 0 ? 1 : (Math.random() < 0.5 ? -1 : 1));
-        const target = clamp(p.slice + dir, 0, W_LAYERS - 1);
+        const target = clamp(p.slice + dir * 2, 0, W_LAYERS - 1);
         if (!p.collides(p.aabb(), target)) {
-          p.w = target;
+          p.setPhaseTarget(target);
           p.stats.phaseShifts++;
           sfx.phaseEnd();
           this.particles.phaseSpark(p.x, p.y, p.z, 22);
-          this.hud.toast('Rift', `Pushed to ${LAYER_NAMES[target]}.`);
+          this.hud.toast('Rift', `Pushed to ${layerName(target)}.`);
         }
         this.riftCooldown = 1.4;
       }
@@ -880,17 +916,13 @@ export class Game {
     // a burst of budget and pull the fog in while it catches up. Holding F
     // pre-builds the neighbouring layers at full range, which is both what the
     // ghost view wants to draw and what makes the commit instant.
-    if (this.lastDominant === undefined) this.lastDominant = p.slice;
-    if (p.slice !== this.lastDominant) { this.lastDominant = p.slice; this.catchUp = 1.5; }
-    if (this.catchUp > 0) this.catchUp -= dt;
-    const ghostDepth = this.heldIs('slice_lens') ? 2 : 1;
-    this.terrain.update(p.x, p.z, p.slice, {
+    // A slab covers several layers, so most travel needs no work at all; a
+    // rebuild only lands when the slab re-centres, and the fog closes in while
+    // the builder catches up so the horizon thickens instead of showing holes.
+    this.terrain.update(p.x, p.z, p.w, {
       renderDistance: this.settings.renderDistance,
-      ghostDistance: p.phaseHeld
-        ? this.settings.renderDistance
-        : Math.max(2, this.settings.ghostDistance),
-      ghostDepth,
-    }, this.paused ? 1 : (this.catchUp > 0 ? 16 : 6));
+    }, this.paused ? 1 : (this.terrain.settling ? 12 : 5));
+    if (this.catchUp > 0) this.catchUp -= dt;
     this.unloadFarChunks();
 
     // --- entities ----------------------------------------------------------
@@ -914,15 +946,11 @@ export class Game {
       this.hud.setInteract('');
     }
 
-    // --- ghost reveal near hyper-optics ------------------------------------
-    this.revealTimer -= dt;
-    if (this.revealTimer <= 0) {
-      this.revealTimer = 0.4;
-      this.ghostReveal = this.scanReveal() ? 1 : 0;
-    }
+    // drop hyper-slices we have travelled away from
+    this.trimTimer -= dt;
+    if (this.trimTimer <= 0) { this.trimTimer = 2.5; this.world.trimSlices(p.slice); }
 
     this.updateCamera(dt);
-    this.applySliceRoles();
     if (!this.hudHidden) this.hud.update(dt);
     if (this.debugOn) this.hud.setDebug(this.debugText());
   }
@@ -930,16 +958,6 @@ export class Game {
   heldIs(name) {
     const h = this.player.held;
     return !!(h && h.item === name);
-  }
-
-  scanReveal() {
-    const p = this.player, w = p.slice;
-    const bx = Math.floor(p.x), by = Math.floor(p.y), bz = Math.floor(p.z);
-    for (let dy = -3; dy <= 3; dy++) for (let dx = -5; dx <= 5; dx++) for (let dz = -5; dz <= 5; dz++) {
-      const id = this.world.getBlock(bx + dx, by + dy, bz + dz, w);
-      if (id === B.slice_lantern || id === B.phase_glass) return true;
-    }
-    return false;
   }
 
   updateEntities(dt) {
@@ -975,7 +993,7 @@ export class Game {
       const d = this.drops[i];
       d.update(dt);
       let gone = d.dead;
-      if (!gone && d.pickupDelay <= 0 && Math.abs(d.w - p.w) < 0.55) {
+      if (!gone && d.pickupDelay <= 0 && Math.abs(d.w - p.w) < 1.2) {
         const dist = Math.hypot(d.x - p.x, d.y - (p.y + 0.9), d.z - p.z);
         if (dist < 1.7) {
           const left = p.inventory.addSmart(d.item, d.count);
@@ -1053,42 +1071,16 @@ export class Game {
     const under = p.eyeY < SEA_LEVEL - 3 && this.world.getSky(Math.floor(p.x), Math.floor(p.eyeY), Math.floor(p.z), p.slice) < 3;
     let rd = this.settings.renderDistance * 16;
     if (this.catchUp > 0) rd *= 0.45 + 0.55 * (1 - clamp(this.catchUp / 1.5, 0, 1));
-    globalUniforms.uFogNear.value = under ? 4 : rd * 0.45;
-    globalUniforms.uFogFar.value = under ? 34 : rd * 0.95;
+    globalUniforms.uFogNear.value = under ? 4 : rd * 0.58;
+    globalUniforms.uFogFar.value = under ? 34 : rd * 1.08;
     globalUniforms.uTime.value = performance.now() / 1000;
     // the peek bubble widens while the phase drive is engaged
-    this.terrain.mats.faint.setBubble(p.phaseHeld ? 12 : 6, p.phaseHeld ? 38 : 20);
     this.sky.update(this.world.time, p.w, cam.position, p.phaseAmount, daylight);
     if (p.headInWater) {
       globalUniforms.uFogColor.value.setRGB(0.08, 0.2, 0.36);
       globalUniforms.uFogNear.value = 0.5;
       globalUniforms.uFogFar.value = 14;
     }
-  }
-
-  applySliceRoles() {
-    const p = this.player;
-    const dom = p.slice;
-    const frac = p.w - dom;
-    const roles = new Map();
-    roles.set(dom, { role: 'solid', alpha: 1 });
-    if (Math.abs(frac) > 0.015) {
-      const partner = clamp(dom + Math.sign(frac), 0, W_LAYERS - 1);
-      if (partner !== dom) roles.set(partner, { role: 'ghost', alpha: clamp(Math.abs(frac) * 1.75, 0, 0.82) });
-    }
-    const wantFaint = (p.phaseHeld && this.settings.ghostSlices) || this.ghostReveal > 0;
-    if (wantFaint) {
-      const depth = this.heldIs('slice_lens') ? 2 : 1;
-      const a = p.phaseHeld ? 0.26 : 0.15;
-      for (let d = 1; d <= depth; d++) {
-        for (const s of [-d, d]) {
-          const w = dom + s;
-          if (w < 0 || w >= W_LAYERS || roles.has(w)) continue;
-          roles.set(w, { role: 'faint', alpha: a / d });
-        }
-      }
-    }
-    this.terrain.applyRoles(roles);
   }
 
   debugText() {
@@ -1101,9 +1093,10 @@ export class Game {
     return [
       `4D-MC · ${this.fps.toFixed(0)} fps · ${this.renderer.info.render.calls} draws · ${(this.renderer.info.render.triangles / 1000).toFixed(0)}k tris`,
       `xyzw ${p.x.toFixed(2)} ${p.y.toFixed(2)} ${p.z.toFixed(2)} ${p.w.toFixed(3)}`,
-      `layer ${p.slice} (${LAYER_NAMES[p.slice]}) · anchor ${p.anchorLayer} · stability ${p.stability.toFixed(0)}`,
-      `chunks ${s.chunks} · slices gen ${s.slicesGen} lit ${s.slicesLit}`,
-      `meshes ${t.meshes} · queued ${t.queue} · faces ${(t.faces / 1000).toFixed(1)}k`,
+      `layer ${p.slice} (${layerName(p.slice)}) · anchor ${p.anchorLayer} · stability ${p.stability.toFixed(0)}`,
+      `W ${p.w.toFixed(3)} -> ${p.wTarget.toFixed(2)} · pair ${this.terrain.lower}/${this.terrain.upper} t=${(p.w - Math.floor(p.w)).toFixed(2)}`,
+      `chunks ${s.chunks} · slices ${s.slices} gen ${s.slicesGen} lit ${s.slicesLit}`,
+      `meshes ${t.meshes} (${t.drawn} drawn, ${t.stale} stale) · queued ${t.queue} · faces ${(t.faces / 1000).toFixed(1)}k · mesh ${t.meshMs.toFixed(1)}ms`,
       `entities: mobs ${this.mobs.length} npcs ${this.npcs.length} drops ${this.drops.length}`,
       `biome ${this.world.biomeAt(Math.floor(p.x), Math.floor(p.z), p.slice).name} · light ${(this.world.lightValue(Math.floor(p.x), Math.floor(p.y + 1), Math.floor(p.z), p.slice)).toFixed(2)}`,
       `looking at ${look}`,

@@ -66,6 +66,56 @@ const STEP_PROFILE = {
   glass:  () => { noise(0.04, 4200, 0.06, 3); tone(1800, 0.05, 'sine', 0.04); },
 };
 
+/**
+ * A continuous two-oscillator drone whose pitch tracks how fast you are moving
+ * through W. Travel you can hear is travel you can pace.
+ */
+const drone = { osc: null, osc2: null, gain: null, filter: null };
+export function phaseDroneStart() {
+  const ctx = CTX.ctx;
+  if (!ctx || !CTX.enabled || drone.osc) return;
+  const t0 = ctx.currentTime;
+  drone.gain = ctx.createGain();
+  drone.gain.gain.setValueAtTime(0.0001, t0);
+  drone.gain.gain.linearRampToValueAtTime(0.02, t0 + 0.25);
+  drone.filter = ctx.createBiquadFilter();
+  drone.filter.type = 'lowpass';
+  drone.filter.frequency.value = 900;
+  drone.filter.Q.value = 3;
+  drone.osc = ctx.createOscillator();
+  drone.osc.type = 'sawtooth';
+  drone.osc.frequency.value = 62;
+  drone.osc2 = ctx.createOscillator();
+  drone.osc2.type = 'sine';
+  drone.osc2.frequency.value = 93;
+  drone.osc.connect(drone.filter);
+  drone.osc2.connect(drone.filter);
+  drone.filter.connect(drone.gain);
+  drone.gain.connect(CTX.master);
+  drone.osc.start(t0);
+  drone.osc2.start(t0);
+}
+/** @param speed layers per second @param frac 0..1 position between layers */
+export function phaseDroneSet(speed, frac) {
+  const ctx = CTX.ctx;
+  if (!ctx || !drone.osc) return;
+  const t = ctx.currentTime;
+  const s = Math.min(1, speed / 2.6);
+  drone.osc.frequency.setTargetAtTime(58 + s * 46, t, 0.08);
+  drone.osc2.frequency.setTargetAtTime(87 + s * 74 + Math.sin(frac * Math.PI * 2) * 6, t, 0.08);
+  drone.filter.frequency.setTargetAtTime(520 + s * 1500, t, 0.1);
+  drone.gain.gain.setTargetAtTime(0.014 + s * 0.05, t, 0.1);
+}
+export function phaseDroneStop() {
+  const ctx = CTX.ctx;
+  if (!ctx || !drone.osc) return;
+  const t = ctx.currentTime;
+  drone.gain.gain.setTargetAtTime(0.0001, t, 0.09);
+  const o = drone.osc, o2 = drone.osc2;
+  setTimeout(() => { try { o.stop(); o2.stop(); } catch (e) { /* already stopped */ } }, 500);
+  drone.osc = null; drone.osc2 = null;
+}
+
 export const sfx = {
   step(mat) { (STEP_PROFILE[mat] || STEP_PROFILE.stone)(); },
   dig(mat) { (STEP_PROFILE[mat] || STEP_PROFILE.stone)(); },

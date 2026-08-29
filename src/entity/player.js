@@ -2,15 +2,21 @@
 // The player: movement, vitals, and the phase drive that moves them along W.
 // ---------------------------------------------------------------------------
 
-import { Entity, GRAVITY } from './entity.js';
+import { Entity } from './entity.js';
 import { PlayerInventory } from '../world/inventory.js';
-import { W_LAYERS, W_MID } from '../world/constants.js';
-import { B, block, IS_SOLID } from '../world/blocks.js';
+import { W_LAYERS } from '../world/constants.js';
+import { B, block } from '../world/blocks.js';
 import { clamp, damp } from '../core/mathx.js';
 import { getItem } from '../world/items.js';
 
-export const PHASE_COST_PER_LAYER = 26;
+export const PHASE_COST_PER_LAYER = 3.4;
 export const MAX_STABILITY = 100;
+/** Hyper-layers a single wheel notch asks for. */
+export const PHASE_SCROLL_STEP = 1;
+/** Ceiling on travel speed, in layers per second. Travel must stay readable. */
+export const PHASE_MAX_SPEED = 2.6;
+/** How hard W chases its target. Higher is snappier, lower is more floaty. */
+export const PHASE_EASE = 6.5;
 
 export class Player extends Entity {
   constructor(world, x, y, z, w, mode = 'survival') {
@@ -35,7 +41,11 @@ export class Player extends Entity {
     this.phaseHeld = false;
     this.phaseAmount = 0;      // 0..1 UI blend for the phase visuals
     this.phaseBlocked = 0;
-    this.phaseNudge = 0;
+    this.phaseInput = 0;       // recent wheel activity, for the HUD
+    this.phaseDenied = '';
+    this.phaseWaiting = false;
+    this.phaseSpeed = 0;       // layers per second, smoothed, for HUD and audio
+    this.wTarget = w;          // where the drive is taking us
     this.bob = 0;
     this.stepDistance = 0;
     this.fallStart = null;
@@ -79,9 +89,13 @@ export class Player extends Entity {
     if (input.right) mx += 1;
     const len = Math.hypot(mx, mz);
     if (len > 0) { mx /= len; mz /= len; }
+    // The camera is yaw-rotated about +Y with THREE's default -Z forward, so
+    // forward = (-sin y, 0, -cos y) and right = (cos y, 0, -sin y). Building the
+    // move vector from anything else reflects the control frame instead of
+    // rotating it, which is why W/S and A/D felt swapped depending on facing.
     const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
     const dirX = mx * cos - mz * sin;
-    const dirZ = mx * sin + mz * cos;
+    const dirZ = -(mx * sin + mz * cos);
 
     let speed = 4.35;
     if (this.sneaking) speed = 1.45;
@@ -194,43 +208,88 @@ export class Player extends Entity {
   // The phase drive
   // -------------------------------------------------------------------------
 
-  /** @returns {'ok'|'blocked'|'drained'} */
-  phaseBy(delta, dt) {
-    if (delta === 0) return 'ok';
+  // -------------------------------------------------------------------------
+  // The phase drive
+  //
+  // The wheel does not move you; it moves your *destination*. W then eases
+  // toward it under a speed cap, which is what makes travel feel like sliding
+  // a hyperplane through the world rather than teleporting between slides.
+  // -------------------------------------------------------------------------
+
+  /** One wheel notch while the drive is engaged. */
+  nudgePhase(notches) {
+    if (!this.phaseHeld) return;
+    const dir = Math.sign(notches);
+    if (!dir) return;
+    if (this.gameMode !== 'creative' && this.stability <= 0.5) {
+      this.phaseBlocked = 0.35;
+      this.phaseDenied = 'drained';
+      return;
+    }
+    const step = PHASE_SCROLL_STEP * Math.abs(notches);
+    this.wTarget = clamp(this.wTarget + dir * step, 0, W_LAYERS - 1);
+    this.phaseInput = 0.45;
+  }
+
+  /** Absolute retarget, used by rifts and by the release-snap. */
+  setPhaseTarget(w) { this.wTarget = clamp(w, 0, W_LAYERS - 1); }
+
+  /**
+   * Called every frame; moves W toward wTarget.
+   * @returns 'idle'|'moving'|'blocked'|'drained'
+   */
+  updatePhase(dt) {
+    if (this.phaseInput > 0) this.phaseInput -= dt;
+    const delta = this.wTarget - this.w;
+    if (Math.abs(delta) < 1e-4) {
+      this.w = this.wTarget;
+      this.phaseSpeed = damp(this.phaseSpeed, 0, 8, dt);
+      return 'idle';
+    }
+
     const creative = this.gameMode === 'creative';
-    if (!creative) {
-      const cost = Math.abs(delta) * PHASE_COST_PER_LAYER;
-      if (this.stability <= 0.5) { this.snapToLayer(); return 'drained'; }
-      this.stability = Math.max(0, this.stability - cost);
+    if (!creative && this.stability <= 0.01) {
+      this.wTarget = Math.round(this.w);
+      this.phaseDenied = 'drained';
+      return 'drained';
     }
-    const target = clamp(this.w + delta, 0, W_LAYERS - 1);
+
+    // eased, then speed-capped, so a long queued jump still travels calmly
+    let next = damp(this.w, this.wTarget, PHASE_EASE, dt);
+    const cap = PHASE_MAX_SPEED * dt;
+    if (Math.abs(next - this.w) > cap) next = this.w + Math.sign(delta) * cap;
+
     const curDom = this.slice;
-    const newDom = clamp(Math.round(target), 0, W_LAYERS - 1);
-    if (newDom !== curDom) {
-      if (this.collides(this.aabb(), newDom)) {
-        // materialising inside rock is not allowed
-        this.w = curDom + Math.sign(delta) * 0.46;
-        this.phaseBlocked = 0.4;
-        return 'blocked';
-      }
-      this.stats.phaseShifts++;
+    const newDom = clamp(Math.round(next), 0, W_LAYERS - 1);
+    if (!creative && newDom !== curDom && this.collides(this.aabb(), newDom)) {
+      // materialising inside rock is not allowed: stop just short of the border
+      this.w = curDom + Math.sign(delta) * 0.49;
+      this.wTarget = this.w;
+      this.phaseBlocked = 0.45;
+      this.phaseDenied = 'blocked';
+      return 'blocked';
     }
-    this.w = target;
-    return 'ok';
+
+    const travelled = Math.abs(next - this.w);
+    this.phaseSpeed = damp(this.phaseSpeed, dt > 0 ? travelled / dt : 0, 10, dt);
+    this.w = next;
+    if (newDom !== curDom) this.stats.phaseShifts++;
+    if (!creative) this.stability = Math.max(0, this.stability - travelled * PHASE_COST_PER_LAYER);
+    return 'moving';
   }
 
   /** Settle onto the nearest legal integer layer. */
   snapToLayer() {
     const near = clamp(Math.round(this.w), 0, W_LAYERS - 1);
-    if (!this.collides(this.aabb(), near)) { this.w = near; return near; }
+    if (!this.collides(this.aabb(), near)) { this.setPhaseTarget(near); return near; }
     for (let r = 1; r < W_LAYERS; r++) {
       for (const s of [-1, 1]) {
         const t = near + s * r;
         if (t < 0 || t >= W_LAYERS) continue;
-        if (!this.collides(this.aabb(), t)) { this.w = t; return t; }
+        if (!this.collides(this.aabb(), t)) { this.setPhaseTarget(t); return t; }
       }
     }
-    this.w = near;
+    this.setPhaseTarget(near);
     return near;
   }
 

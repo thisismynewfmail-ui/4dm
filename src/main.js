@@ -11,7 +11,7 @@ import { openCodex, closeCodex, codexOpen } from './ui/codex.js';
 import { loadSettings, saveSettings, DEFAULT_SETTINGS, getMeta, loadWorldData, saveWorldData, updateMeta } from './save/storage.js';
 import { initAudio, resumeAudio, setVolume, sfx } from './audio/sfx.js';
 import { $, show, hide } from './ui/dom.js';
-import { W_MID, W_LAYERS } from './world/constants.js';
+import { W_MID } from './world/constants.js';
 import { blocks } from './world/blocks.js';
 import { clamp } from './core/mathx.js';
 
@@ -25,8 +25,9 @@ class App {
     this.input = {
       forward: false, back: false, left: false, right: false,
       jump: false, sneak: false, sprint: false, phase: false,
-      mine: false, use: false, phaseDelta: 0,
+      mine: false, use: false, phaseNotches: 0,
     };
+    this.wheelAccum = 0;
     this.lastTime = performance.now();
     this.accum = 0;
     this.saveTimer = 0;
@@ -124,10 +125,8 @@ class App {
     fill.style.width = '88%';
     await frame();
     for (let i = 0; i < 26; i++) {
-      game.terrain.update(p.x, p.z, p.slice, {
+      game.terrain.update(p.x, p.z, p.w, {
         renderDistance: this.settings.renderDistance,
-        ghostDistance: Math.max(2, this.settings.ghostDistance),
-        ghostDepth: 1,
       }, 14);
       if (i % 5 === 0) await frame();
     }
@@ -256,28 +255,45 @@ class App {
       if (e.button === 2) this.input.use = false;
     });
 
+    // Looking around is never taken over by the phase drive: you hold F, keep
+    // looking wherever you like, and the wheel slides the world past you.
     document.addEventListener('mousemove', (e) => {
       if (this.state !== 'playing' || document.pointerLockElement !== this.canvas) return;
       const p = this.game.player;
       const s = this.settings;
       const dx = e.movementX || 0, dy = e.movementY || 0;
+      // The first event after the pointer locks (and the odd driver hiccup)
+      // reports the jump from the cursor's old page position to the lock
+      // origin — hundreds of pixels in one go, which snaps the view somewhere
+      // random. No human flick covers a third of the screen between two
+      // events, so drop the whole sample rather than clamping it.
+      const spike = Math.max(200, Math.min(window.innerWidth, window.innerHeight) * 0.35);
+      if (Math.abs(dx) > spike || Math.abs(dy) > spike) return;
       p.yaw -= dx * s.mouseSensitivity;
-      if (this.input.phase) {
-        this.input.phaseDelta += (s.invertY ? dy : -dy) * s.phaseSensitivity;
-      } else {
-        p.pitch += (s.invertY ? dy : -dy) * s.mouseSensitivity;
-        p.pitch = clamp(p.pitch, -Math.PI / 2 + 0.001, Math.PI / 2 - 0.001);
-      }
+      p.pitch += (s.invertY ? dy : -dy) * s.mouseSensitivity;
+      p.pitch = clamp(p.pitch, -Math.PI / 2 + 0.001, Math.PI / 2 - 0.001);
     });
 
     window.addEventListener('wheel', (e) => {
       if (this.state !== 'playing' || this.uiOpen) return;
+      // Normalise across mice, trackpads and line/page delta modes so one
+      // physical notch is one notch everywhere.
+      let d = e.deltaY;
+      if (e.deltaMode === 1) d *= 16;
+      else if (e.deltaMode === 2) d *= 400;
+      this.wheelAccum += clamp(d, -600, 600);
+      const NOTCH = 100;
+      let n = 0;
+      while (this.wheelAccum >= NOTCH) { this.wheelAccum -= NOTCH; n += 1; }
+      while (this.wheelAccum <= -NOTCH) { this.wheelAccum += NOTCH; n -= 1; }
+      if (!n) return;
       if (this.input.phase) {
-        this.input.phaseDelta += (e.deltaY > 0 ? -1 : 1) * 0.12;
-        return;
+        // scrolling down travels toward KATA, up toward ANA
+        this.input.phaseNotches += -n * this.settings.phaseScrollStep;
+      } else {
+        const inv = this.game.player.inventory;
+        inv.selected = (inv.selected + n + 9 * 4) % 9;
       }
-      const inv = this.game.player.inventory;
-      inv.selected = (inv.selected + (e.deltaY > 0 ? 1 : -1) + 9) % 9;
     }, { passive: true });
 
     window.addEventListener('keydown', (e) => this.onKey(e, true));
@@ -403,11 +419,8 @@ class App {
           if (this.saveTimer > this.settings.autoSaveSeconds) { this.saveTimer = 0; this.save(); }
         } else if (this.state === 'paused' || this.state === 'dead') {
           // keep the world rendering behind the menu, but frozen
-          g.applySliceRoles();
-          g.terrain.update(g.player.x, g.player.z, g.player.slice, {
+          g.terrain.update(g.player.x, g.player.z, g.player.w, {
             renderDistance: this.settings.renderDistance,
-            ghostDistance: Math.max(2, this.settings.ghostDistance),
-            ghostDepth: 1,
           }, 2);
         }
         g.render();

@@ -43,9 +43,9 @@ Worlds are saved to `localStorage`; nothing is uploaded anywhere.
 | **Space** | Jump / swim up |
 | **Shift** | Sneak (won't walk off ledges) / descend |
 | **Ctrl** | Sprint |
-| **F** *(hold)* | **Phase** — vertical mouse moves you through the fourth dimension |
+| **F** *(hold)* + **wheel** | **Phase** — travel through the fourth dimension. Look around freely while you do it |
 | **Mouse** | Look. Left click mines and attacks, right click places, uses and talks |
-| **Wheel** / **1–9** | Select hotbar slot (**F** + wheel also phases) |
+| **Wheel** / **1–9** | Select hotbar slot (with **F** held, the wheel drives W instead) |
 | **E** | Inventory (4×4 assembly grid, armour, storage) |
 | **C** | Codex — every recipe in the game |
 | **Q** | Drop the held item (**Ctrl+Q** drops the stack) |
@@ -59,14 +59,27 @@ Everything is rebindable in Settings.
 
 ## The fourth dimension, briefly
 
-The world is a grid indexed `(x, y, z, w)`. You always occupy one integer
-`w` — one **hyper-layer** — and see only that slice. There are seven, named
-KATA III through ORIGIN to ANA III.
+The world is a grid indexed `(x, y, z, w)`. Your position along `w` is a real
+number, and what you see is the 3D cross-section there. There are **41
+hyper-layers**, KATA 20 through ORIGIN to ANA 20.
 
-- **The Slice Compass**, bottom right, is an isometric stack of all seven
-  layers showing a live cross-section of the terrain around you at every depth.
-  An empty plate means that layer is open air there; a full one means rock.
-  It is the single most important instrument in the game.
+**Hold F and roll the wheel.** Each notch moves your *destination*; your actual
+position eases toward it under a speed cap, so travel is slow enough to read
+and never jumps. Two layers are on screen at once and the GPU dissolves between
+them with an ordered dither, so the terrain **flows** — hills rise, coastlines
+walk, a wall opens into a doorway — rather than cutting between slides. Layers
+are deliberately close together (a whole layer moves the ground by about one
+block on average) which is exactly what makes the motion continuous. Let go of
+F and you settle onto the nearest whole layer.
+
+- **The Slice Compass**, bottom right, is an isometric stack of the layers
+  around you showing a live cross-section of the terrain at every depth. It
+  slides continuously as you travel. An empty plate means that layer is open
+  air there; a full one means rock. It is the single most important instrument
+  in the game.
+- **The hyper-tape** appears above the hotbar while the drive is engaged: a
+  filmstrip of the fourth axis with your position, your destination and the
+  layer ticks sliding past.
 - **Phasing costs Phase Stability** (the cyan meter). It regenerates on its
   own, fast near an Anchor Block, and instantly from a Chrono Berry.
 - **You cannot materialise inside stone.** The drive refuses and shoves you
@@ -77,6 +90,11 @@ KATA III through ORIGIN to ANA III.
   don't dig*.
 - **Ores stratify by layer.** Phaseite only forms in the outer layers;
   Aetherite hugs the core. You have to travel in W to get rich.
+- **The people are not people.** The **Fold-Kin** are four-dimensional beings,
+  and what you meet is the part of one that intersects your layer: a hovering
+  core of nested boxes with shards in orbit, some of which drift out of your
+  cross-section and briefly stop existing. Ten professions, ten silhouettes —
+  a ring, a stack, a cage, a lens — readable across a field.
 - **Some creatures are 4D.** Their bodies extend along `w`, so you see only the
   cross-section that intersects you: they appear cut open, with a shimmering
   plane where the rest of them isn't. Others are ordinary 3D beings, whole and
@@ -96,12 +114,14 @@ KATA III through ORIGIN to ANA III.
   pattern has *two hyper-layers* — the only place phase gear can be made.
 - **18 creature species**, split between layer-bound and hyper-dimensional,
   with light- and layer-sensitive spawning.
-- **10 NPC professions** with names, dialogue and trade tables, living in
-  generated villages and paid in Phase Shards.
+- **10 Fold-Kin professions**, each a distinct hovering geometry with its own
+  voice, orbiting shards that drift along W, and a trade table paid in Phase
+  Shards.
 - **Structures** — ruins, rift shrines, villages, buried caches, and a
   guaranteed supply Cache and Anchor Block at spawn.
-- **12 biomes** that drift with `w`, 4D caves, a day/night cycle with a
-  per-layer palette, flood-filled light, and a full survival loop.
+- **12 biomes** that drift with `w`, 4D caves, a day/night cycle whose palette
+  is a continuous function of your hyper-position, flood-filled light, and a
+  full survival loop.
 - An original interface ("Tessellate"), a world manager, full settings with key
   rebinding, and localStorage persistence of blocks, containers and player.
 
@@ -136,10 +156,10 @@ lighting and crafting can be exercised in plain Node.
 
 ```bash
 python3 -m http.server 8123 &      # the suites drive a real browser
-node test/functional.mjs           # world, crafting, mobs, lighting, phasing
+node test/functional.mjs           # world, crafting, mobs, lighting, phase drive
 node test/inventory.mjs            # dragging, splitting, quick-move, crafting
 node test/persistence.mjs          # save/load round trip + input handling
-node test/interaction.mjs          # real mouse & keyboard: mine, place, phase
+node test/interaction.mjs          # real mouse & keyboard: mine, place, WASD, wheel travel
 ```
 
 They need Playwright and a Chromium build; set `CHROME_PATH` if yours is not

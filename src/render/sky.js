@@ -2,7 +2,7 @@
 // colour of the light tells you where you are in the fourth dimension.
 
 import * as THREE from '../../vendor/three.module.js';
-import { LAYER_SKY, LAYER_FOG, W_LAYERS } from '../world/constants.js';
+import { layerAtmosphere } from '../world/constants.js';
 import { globalUniforms } from './voxelmat.js';
 
 const SKY_VERT = /* glsl */`
@@ -26,7 +26,7 @@ uniform float uNight;
 uniform float uPhase;
 void main() {
   float h = vDir.y;
-  vec3 c = mix(uHorizon, uTop, clamp(pow(max(h, 0.0), 0.55), 0.0, 1.0));
+  vec3 c = mix(uHorizon, uTop, clamp(pow(max(h, 0.0), 0.42), 0.0, 1.0));
   c = mix(c, uGround, clamp(-h * 3.0, 0.0, 1.0));
   float sd = max(dot(normalize(vDir), normalize(uSunDir)), 0.0);
   c += uSunColor * pow(sd, 8.0) * 0.5;
@@ -121,13 +121,11 @@ export class Sky {
     const ang = (t - 0.25) * Math.PI * 2;
     const sunDir = new THREE.Vector3(Math.cos(ang) * 0.4, Math.sin(ang), Math.cos(ang) * 0.9).normalize();
 
-    const w0 = Math.max(0, Math.min(W_LAYERS - 1, Math.floor(wFloat)));
-    const w1 = Math.max(0, Math.min(W_LAYERS - 1, w0 + 1));
-    const f = Math.max(0, Math.min(1, wFloat - w0));
-    const skyA = new THREE.Color(LAYER_SKY[w0]), skyB = new THREE.Color(LAYER_SKY[w1]);
-    const fogA = new THREE.Color(LAYER_FOG[w0]), fogB = new THREE.Color(LAYER_FOG[w1]);
-    const sky = skyA.clone().lerp(skyB, f);
-    const fog = fogA.clone().lerp(fogB, f);
+    // The atmosphere is a continuous function of W, so a fractional hyper-layer
+    // has its own colour of light and travel reads as a slow change of season.
+    const atm = layerAtmosphere(wFloat);
+    const sky = new THREE.Color(atm.sky[0], atm.sky[1], atm.sky[2]);
+    const fog = new THREE.Color(atm.fog[0], atm.fog[1], atm.fog[2]);
 
     const night = 1 - daylight;
     const dusk = Math.max(0, 1 - Math.abs(Math.sin(ang)) * 2.2);

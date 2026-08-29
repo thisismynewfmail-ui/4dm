@@ -6,14 +6,16 @@
 // Override CHROME_PATH and BASE_URL if your setup differs.
 
 // Resolve Playwright from the project, or from a global install via
-// PLAYWRIGHT_PATH (ESM ignores NODE_PATH, so this has to be explicit).
+// PLAYWRIGHT_PATH (ESM ignores NODE_PATH, so this has to be explicit). ESM has
+// no directory imports either, so point it at the entry file:
+//   PLAYWRIGHT_PATH=/usr/lib/node_modules/playwright/index.mjs
 let chromium;
 try {
   ({ chromium } = await import('playwright'));
 } catch (e) {
   const alt = process.env.PLAYWRIGHT_PATH;
   if (!alt) {
-    console.error('playwright not found. Run `npm install`, or set PLAYWRIGHT_PATH to a global install.');
+    console.error('playwright not found. Run `npm install`, or point PLAYWRIGHT_PATH at a global\n  install\'s index.mjs.');
     process.exit(2);
   }
   ({ chromium } = await import(alt));

@@ -382,15 +382,27 @@ input[type=range]::-moz-range-thumb {
   content: ''; position: absolute; left: 6px; right: 6px; bottom: -6px; height: 2px; background: var(--cyan);
 }
 
+#hyper-tape {
+  position: absolute; left: 50%; bottom: 104px; transform: translateX(-50%) translateY(6px);
+  padding: 6px 12px 4px;
+  background: linear-gradient(180deg, rgba(8,12,20,.82), rgba(5,8,14,.88));
+  border: 1px solid rgba(110,231,255,.32);
+  backdrop-filter: blur(6px);
+  clip-path: polygon(14px 0, calc(100% - 14px) 0, 100% 100%, 0 100%);
+  opacity: 0; transition: opacity .16s ease-out, transform .16s ease-out;
+}
+#hyper-tape.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+#tape-canvas { width: 540px; height: 44px; display: block; }
+
 #slice-compass {
-  position: absolute; right: 16px; bottom: 16px; width: 208px; text-align: center;
+  position: absolute; right: 16px; bottom: 16px; width: 212px; text-align: center;
   padding: 6px 6px 8px;
   background: linear-gradient(160deg, rgba(10,14,24,.62), rgba(6,9,16,.72));
   border: 1px solid rgba(70,84,105,.5);
   backdrop-filter: blur(5px);
   clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
 }
-#compass-canvas { width: 196px; height: 196px; display: block; }
+#compass-canvas { width: 200px; height: 214px; display: block; }
 #compass-label {
   font-family: var(--font-display); font-size: 12px; letter-spacing: .2em; color: var(--cyan);
   margin-top: 0; text-shadow: 0 2px 8px #000;

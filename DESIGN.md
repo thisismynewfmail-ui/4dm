@@ -17,17 +17,31 @@ player always sees one *slice* of the world: the `w = W` hyperplane they
 currently occupy. Everything the player does — mining, building, walking,
 fighting — happens inside that slice.
 
-Holding **F** unlocks the fourth axis. Vertical mouse motion now drives `w`
-instead of pitch. The terrain **morphs continuously**: hills flow into valleys,
-a wall dissolves into a doorway, an ore vein you could see but not reach in
-slice 3 becomes solid rock at your feet in slice 4. Because the terrain is
-generated from **4D noise**, adjacent slices are *related* — recognisable, but
-never identical. That coherence is what sells the illusion.
+Holding **F** engages the phase drive; the **mouse wheel** then slides your
+cross-section along `w` while you keep looking around freely. Each notch moves
+a *destination*, and your position eases toward it under a speed cap, so travel
+is always slow enough to read.
+
+The terrain **morphs continuously**: hills flow into valleys, a wall dissolves
+into a doorway, an ore vein you could see but not reach becomes solid rock at
+your feet. Two things make that work. The world is generated from **4D noise**,
+so neighbouring layers are *related* rather than random; and there are **41 of
+them, closely spaced**, so a whole layer of travel moves the ground by about
+one block on average. Fine steps are what turn a slideshow into motion — the
+same reason a flipbook works and a slide carousel does not.
 
 The **Slice Compass** in the bottom-right corner is a small isometric stack of
-plates — one plate per hyper-layer — showing a live cross-section of the terrain
-around you at every depth. The plate you occupy is lit; the others are ghosted.
-It is the single most important piece of UI in the game, and it is always on.
+plates — one per hyper-layer near you — showing a live cross-section of the
+terrain around you at every depth. It slides *continuously* with `w`, so at
+20.4 the stack sits four tenths of a step along and the instrument moves with
+the world instead of ticking after it. The plate you occupy is lit; the others
+fade with distance, and a ruler down the side shows where this window sits in
+the full 41-layer range. It is the single most important piece of UI in the
+game, and it is always on.
+
+While the drive is engaged, a **hyper-tape** rises above the hotbar: a
+filmstrip of the fourth axis with layer ticks sliding past, your position
+pinned at the centre and your destination marked ahead of it.
 
 ---
 
@@ -45,16 +59,17 @@ for a later pass.
 2. **[BUILT] Per-slice palette drift.** Each hyper-layer owns a slightly
    different sky gradient, fog colour and sun hue. You learn to recognise
    "where" you are in W by the colour of the light — navigation by mood.
-3. **[BUILT] Cross-section Slice Compass HUD.** Isometric plate stack, live
-   terrain sampling, occupied layer highlighted, animates while phasing.
-4. **[BUILT] Continuous phase blending.** Rendering interpolates between the two
-   nearest slices; the dominant slice is solid, the other is an overlay, so the
-   world is never hollow mid-transition.
-5. **[BUILT] Phase ghosts, inside a bubble.** While F is held the neighbouring
-   layers are drawn over your own in cyan and violet, with a brightness floor
-   so unlit rock next door never blacks out your sky, and a distance falloff so
-   the effect is a local *sphere of insight* rather than a fog of everything.
-   You can see the wall you are about to materialise inside.
+3. **[BUILT] Cross-section Slice Compass HUD.** Isometric plate stack that
+   slides continuously with W, live terrain sampling on every plate, a
+   full-range ruler, and a destination marker while travelling.
+4. **[BUILT] Continuous phase blending.** An ordered-dither cross-dissolve
+   between the two bracketing layers, at 41 closely spaced layers, so travel
+   reads as the terrain flowing rather than as slides changing.
+5. **[CUT] Phase ghosts.** Neighbouring layers were once drawn over your own as
+   translucent overlays. With 41 fine layers and a live compass the overlay
+   became noise on top of a view that already morphs, so it was removed in
+   favour of the dissolve and the instruments. The Compass answers "what is
+   over there" better than a hologram ever did.
 6. **[BUILT] Phase collision.** You cannot materialise inside rock. Blocked
    phases shove you back with a stability penalty and a hard audio cue.
 7. **[BUILT] Phase Stability meter.** A third vital. Phasing drains it, standing
@@ -63,10 +78,9 @@ for a later pass.
 8. **[BUILT] Hyper-blocks.** Certain blocks (Tesseract Core, Boundary Stone)
    exist at *every* w simultaneously — they are 4D-solid, the landmarks of the
    hyperworld and the only truly reliable navigation aid.
-9. **[BUILT] Phase Glass & the Slice Lantern.** Hyper-optics. Standing near
-   either one holds the phase bubble open without engaging the drive, so the
-   neighbouring layers stay faintly visible around your base. Build a window
-   out of Phase Glass and you can watch the layer next door.
+9. **[BUILT] Phase Glass & the Slice Lantern.** Hyper-optics, built from
+   phaseite and aetherite; landmarks that read as belonging to the fourth
+   dimension rather than the third.
 10. **[BUILT] Rift Blocks.** Step in and you are shoved one layer ana or kata.
     Natural ones generate in caves; crafted ones let you build hyper-elevators.
 11. **[BUILT] Anchor Blocks.** Suppress phasing in a radius and regenerate
@@ -132,7 +146,11 @@ for a later pass.
 40. **[BUILT] Light-and-layer-based spawning.** Darkness spawns hostiles; outer
     hyper-layers spawn the strange things.
 41. **[BUILT] Knockback, invulnerability frames, death drops, despawn rules.**
-42. **[BUILT] 10 NPC professions** with names, dialogue, and trade tables.
+42. **[BUILT] The Fold-Kin — 10 professions of four-dimensional being.** Not
+    humans: hovering cores of nested boxes with shards in orbit, some of which
+    drift along W and blink out of your cross-section. Silhouette carries
+    identity — a ring, a stack, a cage, a lens — so a profession is readable
+    across a field before its colours are.
 43. **[BUILT] Trading UI** using Phase Shards as currency.
 44. **[HOOK] NPC schedules / village reputation.**
 45. **[BUILT] The Warden of Layers** — a rare neutral giant that is *anchored in
@@ -207,18 +225,31 @@ One `DataArrayTexture` (16×16×N) holds every tile, so there is zero atlas
 bleeding and no UV padding maths. A single custom GLSL3 `ShaderMaterial` draws
 all terrain: position, uv, texture-layer index and a pre-baked RGB that already
 contains ambient occlusion, face shading and light level. Fog is computed in the
-shader from view depth and tinted per hyper-layer.
+shader from view depth and tinted for the current hyper-position.
 
-Three passes per frame: the dominant slice (opaque + cutout + water), the
-sub-dominant slice as a blended overlay whose alpha is the phase fraction, and —
-only while F is held, or near a hyper-optic — the outer ghost slices at low
-alpha with depth-write off. Each ghost role owns its own bubble radius, so the
-cross-fade partner reads at range while a mere peek stays local.
+**Travel along W is a rendering problem, not a generation problem.** Two
+hyper-layers are meshed and resident at any moment — the pair bracketing your
+position — and the shader runs an **8×8 ordered-dither cross-dissolve** between
+them: each pixel commits to one layer or the other, so there is no transparency,
+no sorting and no depth trouble. Where the two layers agree, which is most of
+the world, the dissolve is invisible; where they disagree, the terrain appears
+to flow.
 
-Changing hyper-layer invalidates every mesh at once, so the builder gets a
-burst of frame budget for 1.5 s afterwards and the fog closes in to match what
-has actually been built — the world thickens toward you instead of showing
-holes.
+Meshing a whole *slab* of layers into one buffer with a per-face layer bitmask
+was tried first and rejected: neighbouring layers put their surfaces at
+different heights, so the union costs one full copy per layer exactly where the
+faces are. Two thin meshes beat one fat one.
+
+Three rules keep travel seamless:
+
+* a layer of **lookahead** in each direction is meshed ahead of you, so
+  crossing into a new layer never waits for a build;
+* a chunk that has only one of the pair draws it outright;
+* a chunk that has neither draws its nearest built layer instead, and a stale
+  mesh is never disposed until a replacement exists.
+
+Nothing therefore blocks the drive, and the horizon can be a moment stale but
+is never holed.
 
 ### Testing
 

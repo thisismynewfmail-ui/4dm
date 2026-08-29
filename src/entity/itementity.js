@@ -12,6 +12,9 @@ import { clamp } from '../core/mathx.js';
 let sharedMat = null;
 export function setItemEntityMaterial(m) { sharedMat = m; }
 
+/** How far along W a dropped item stays visible, in hyper-layers. */
+export const ITEM_W_RANGE = 2.2;
+
 const FACE_V = [
   [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]],
   [[0, 0, 1], [0, 1, 1], [0, 1, 0], [0, 0, 0]],
@@ -110,12 +113,12 @@ export class ItemEntity extends Entity {
 
   render(viewW, light) {
     const d = Math.abs(this.w - viewW);
-    const visible = d < 1.35;
+    const visible = d < ITEM_W_RANGE;
     this.mesh.visible = visible;
     if (!visible) return false;
     this.mesh.position.set(this.x, this.y + 0.06 + Math.sin(this.age * 2.2) * 0.06, this.z);
     this.mesh.rotation.y = this.age * 1.1;
-    this.mesh.scale.setScalar(clamp(1.15 - d * 0.5, 0.5, 1.15));
+    this.mesh.scale.setScalar(clamp(1.1 - d * (0.45 / ITEM_W_RANGE), 0.45, 1.1));
     return true;
   }
 }

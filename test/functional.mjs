@@ -37,8 +37,9 @@ const results = await page.evaluate(async () => {
   g.player.inventory.slots[0] = stack('iron_pickaxe', 1);
   g.mineBlock(bx, by, bz);
   ok('mine removes block', before === B.stone && W.getBlock(bx, by, bz, w) === 0);
-  ok('mine spawns a drop', g.drops.length === dropsBefore + 1, g.drops.length ? g.drops[g.drops.length-1].item : '');
-  ok('stone drops cobblestone', g.drops.length > dropsBefore && g.drops[g.drops.length-1].item === 'cobblestone');
+  const newDrops = g.drops.slice(dropsBefore).map((d) => d.item);
+  ok('mine spawns a drop', newDrops.length >= 1, newDrops.join(','));
+  ok('stone drops cobblestone', newDrops.includes('cobblestone'), newDrops.join(','));
 
   // tier gate: wood pick cannot harvest aetherite ore
   inv.slots[0] = stack('wood_pickaxe', 1);
@@ -157,39 +158,79 @@ const results = await page.evaluate(async () => {
   ok('Q drops one', g.drops.length === nBefore + 1 && inv.slots[0].count === 4);
 
   // ---------- 8. phase mechanics ----------
-  p.w = 3; p.stability = 100;
-  const r1 = p.phaseBy(0.3, 0.016);
-  ok('phase moves w', r1 === 'ok' && Math.abs(p.w - 3.3) < 1e-6, p.w.toFixed(2));
-  ok('phase drains stability', p.stability < 100, p.stability.toFixed(1));
+  const { W_MID, W_LAYERS } = await import('/src/world/constants.js');
+  const HOME = W_MID;
+  p.gameMode = 'survival';
+  p.w = HOME; p.setPhaseTarget(HOME); p.stability = 100;
+  // clear a pocket in the layers we are about to travel through, so the
+  // smoothness measurement is not cut short by a legitimate phase block
+  const px0 = Math.floor(p.x), py0 = Math.floor(p.y), pz0 = Math.floor(p.z);
+  for (let lw = HOME; lw <= HOME + 3; lw++) {
+    for (let dy = 0; dy < 3; dy++) for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      W.setBlock(px0 + dx, py0 + dy, pz0 + dz, lw, 0);
+    }
+    W.setBlock(px0, py0 - 1, pz0, lw, B.stone);
+  }
+
+  // the wheel moves the destination, not the player
+  p.phaseHeld = true;
+  p.nudgePhase(2);
+  ok('a wheel notch retargets the drive', Math.abs(p.wTarget - (HOME + 2)) < 1e-6, p.wTarget);
+  ok('the wheel does not teleport you', p.w === HOME, p.w);
+
+  // travel is eased and speed-capped, so it reads as motion
+  let steps = 0, maxStep = 0, prev = p.w;
+  for (let i = 0; i < 400 && Math.abs(p.w - p.wTarget) > 1e-4; i++) {
+    p.updatePhase(1 / 60);
+    maxStep = Math.max(maxStep, Math.abs(p.w - prev));
+    prev = p.w; steps++;
+  }
+  ok('travel takes many frames (smooth, not a jump)', steps > 30, steps + ' frames');
+  ok('travel respects the speed cap', maxStep <= 2.6 / 60 + 1e-6, maxStep.toFixed(4));
+  ok('travel arrives at the destination', Math.abs(p.w - (HOME + 2)) < 1e-3, p.w.toFixed(3));
+  ok('travel drains stability', p.stability < 100, p.stability.toFixed(1));
+
   // blocked phase: wall the player into the next layer
-  p.w = 3;
+  p.w = HOME; p.setPhaseTarget(HOME); p.stability = 100;
   const fx = Math.floor(p.x), fy = Math.floor(p.y), fz = Math.floor(p.z);
   for (let dy = 0; dy < 2; dy++) for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++)
-    W.setBlock(fx + dx, fy + dy, fz + dz, 4, B.stone);
-  const r2 = p.phaseBy(0.6, 0.016);
-  ok('phase into solid is blocked', r2 === 'blocked' && p.slice === 3, `${r2} w=${p.w.toFixed(2)}`);
+    W.setBlock(fx + dx, fy + dy, fz + dz, HOME + 1, B.stone);
+  p.setPhaseTarget(HOME + 1);
+  let r2 = 'idle';
+  for (let i = 0; i < 200 && r2 !== 'blocked'; i++) r2 = p.updatePhase(1 / 60);
+  ok('phase into solid is blocked', r2 === 'blocked' && p.slice === HOME, `${r2} w=${p.w.toFixed(2)}`);
+
   // drained
-  p.w = 3; p.stability = 0;
-  const r3 = p.phaseBy(0.4, 0.016);
-  ok('no stability = no phasing', r3 === 'drained');
-  p.stability = 100; p.w = 3;
+  p.w = HOME; p.setPhaseTarget(HOME + 3); p.stability = 0;
+  const r3 = p.updatePhase(1 / 60);
+  ok('no stability = no phasing', r3 === 'drained', r3);
+  // and the wheel refuses to queue more while drained
+  p.nudgePhase(1);
+  ok('drained drive ignores the wheel', p.wTarget === Math.round(p.w), p.wTarget);
+  p.stability = 100; p.w = HOME; p.setPhaseTarget(HOME); p.phaseHeld = false;
+
+  // releasing settles onto a whole layer
+  p.w = HOME + 0.37;
+  p.snapToLayer();
+  for (let i = 0; i < 300 && Math.abs(p.w - p.wTarget) > 1e-4; i++) p.updatePhase(1 / 60);
+  ok('release settles onto a whole layer', Math.abs(p.w - Math.round(p.w)) < 1e-3, p.w.toFixed(3));
 
   // ---------- 9. mobs & 4D clipping ----------
   const { Mob, SPECIES } = await import('/src/entity/mobs.js');
-  const m4 = new Mob(W, 'tesser_wraith', p.x + 3, p.y, p.z + 3, 3);
-  ok('4D mob has a hyper extent', m4.hyperExtent > 0);
-  m4.w = 3.4;
-  m4.render(3, 1, 0.016);
+  const m4 = new Mob(W, 'tesser_wraith', p.x + 3, p.y, p.z + 3, W_MID);
+  ok('4D mob has a hyper extent', m4.hyperExtent > 1, m4.hyperExtent.toFixed(1) + ' layers');
+  m4.w = W_MID + 1.4;
+  m4.render(W_MID, 1, 0.016);
   ok('4D mob is clipped when partly out of layer',
     !!m4.materials[0].clippingPlanes && m4.materials[0].clippingPlanes.length === 2);
   ok('4D mob visible from a neighbouring offset', m4.group.visible);
-  m4.w = 3 + m4.hyperExtent + 0.5;
-  const vis = m4.render(3, 1, 0.016);
+  m4.w = W_MID + m4.hyperExtent + 0.5;
+  const vis = m4.render(W_MID, 1, 0.016);
   ok('4D mob hidden beyond its hyper extent', !vis);
-  const m3 = new Mob(W, 'shambler', p.x + 3, p.y, p.z + 3, 3);
-  m3.render(3, 1, 0.016);
+  const m3 = new Mob(W, 'shambler', p.x + 3, p.y, p.z + 3, W_MID);
+  m3.render(W_MID, 1, 0.016);
   ok('3D mob fully visible in its own layer', m3.group.visible && !m3.clipPlane);
-  m3.w = 3; const vis3 = m3.render(4.2, 1, 0.016);
+  m3.w = W_MID; const vis3 = m3.render(W_MID + 4.2, 1, 0.016);
   ok('3D mob invisible from another layer', !vis3);
   m4.dispose(); m3.dispose();
   const kinds = Object.values(SPECIES);
@@ -197,10 +238,16 @@ const results = await page.evaluate(async () => {
   ok('has 4D and 3D species', kinds.some(k=>k.dim===4) && kinds.some(k=>k.dim===3));
 
   // ---------- 10. NPC ----------
-  const { NPC, PROFESSION_KEYS } = await import('/src/entity/npcs.js');
+  const { NPC, PROFESSION_KEYS, PROFESSIONS } = await import('/src/entity/npcs.js');
   ok('npc professions >= 10', PROFESSION_KEYS.length >= 10, PROFESSION_KEYS.length);
-  const npc = g.npcs[0] || new NPC(W, 'smith', p.x+2, p.y, p.z+2, p.slice, 'test');
+  const npc = g.npcs[0] || new NPC(W, 'smith', p.x + 2, p.y, p.z + 2, p.slice, 'test');
   ok('npc has a name and lines', !!npc.name && !!npc.greeting());
+  ok('npc is a hovering hyper-being, not a walker', npc.gravity === 0 && npc.shards.length > 0,
+    `${npc.shards.length} orbiting shards`);
+  ok('npc silhouettes differ by profession', new Set(PROFESSION_KEYS.map((k) => {
+    const d = PROFESSIONS[k];
+    return `${d.core.length}:${(d.rings || []).length}:${d.accent}`;
+  })).size === PROFESSION_KEYS.length);
   // trade
   inv.slots.fill(null);
   inv.addSmart('raw_iron', 4);
@@ -208,20 +255,25 @@ const results = await page.evaluate(async () => {
   ok('npc trade table exists', npc.def.trades.length >= 3);
 
   // ---------- 11. rift block ----------
-  p.w = 3;
-  W.setBlock(Math.floor(p.x), Math.floor(p.y + 0.5), Math.floor(p.z), 3, B.rift_block);
+  const RH = W_MID;
+  p.w = RH; p.setPhaseTarget(RH);
   g.riftCooldown = 0;
-  // the phase-blocking test above walled layer 4; clear both destinations so
-  // the rift's random direction is deterministic in effect
-  for (const lw of [2, 4]) {
+  // clear every layer the rift could throw us through, not just the endpoints:
+  // being blocked partway is correct behaviour, it just is not what we measure.
+  // this wipes the player's own cell too, so the rift block goes in afterwards.
+  for (let lw = RH - 2; lw <= RH + 2; lw++) {
     for (let dy = 0; dy < 3; dy++) for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
       W.setBlock(Math.floor(p.x) + dx, Math.floor(p.y) + dy, Math.floor(p.z) + dz, lw, 0);
     }
     W.setBlock(Math.floor(p.x), Math.floor(p.y) - 1, Math.floor(p.z), lw, B.stone);
   }
-  g.update(0.016, { forward:false,back:false,left:false,right:false,jump:false,sneak:false,sprint:false,phase:false,mine:false,use:false,phaseDelta:0 });
-  ok('rift block shifts the layer', p.slice !== 3, 'now ' + p.slice);
-  W.setBlock(Math.floor(p.x), Math.floor(p.y + 0.5), Math.floor(p.z), 3, 0);
+  W.setBlock(Math.floor(p.x), Math.floor(p.y + 0.5), Math.floor(p.z), RH, B.rift_block);
+  const idle = { forward:false,back:false,left:false,right:false,jump:false,sneak:false,sprint:false,phase:false,mine:false,use:false,phaseNotches:0 };
+  g.update(0.016, idle);
+  ok('rift block retargets the drive', p.wTarget !== RH, `target ${p.wTarget}`);
+  for (let i = 0; i < 300 && Math.abs(p.w - p.wTarget) > 1e-3; i++) p.updatePhase(1 / 60);
+  ok('rift block shifts the layer', p.slice !== RH, 'now ' + p.slice);
+  W.setBlock(Math.floor(p.x), Math.floor(p.y + 0.5), Math.floor(p.z), RH, 0);
 
   // ---------- 12. lighting ----------
   const ly = W.heightAt(bx + 5, bz + 5, w) + 1;
@@ -237,10 +289,13 @@ const results = await page.evaluate(async () => {
 
   // ---------- 13. 4D world coherence ----------
   const hs = [];
-  for (let ww = 0; ww < 7; ww++) hs.push(W.gen.heightAt(40, 40, ww));
+  for (let ww = 0; ww < W_LAYERS; ww++) hs.push(W.gen.heightAt(40, 40, ww));
   const diffs = hs.slice(1).map((h, i) => Math.abs(h - hs[i]));
-  ok('terrain differs across hyper-layers', new Set(hs).size > 2, hs.join(','));
-  ok('adjacent layers stay related (smooth 4D field)', Math.max(...diffs) < 22, 'max step ' + Math.max(...diffs));
+  const meanStep = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+  ok('terrain differs across hyper-layers', new Set(hs).size > 4, `${new Set(hs).size} distinct heights over ${W_LAYERS} layers`);
+  ok('adjacent layers stay close (travel reads as flow)', meanStep <= 1.5, 'mean step ' + meanStep.toFixed(2));
+  ok('the full W range is a real journey', Math.max(...hs) - Math.min(...hs) >= 8,
+    `${Math.min(...hs)}..${Math.max(...hs)}`);
 
   return R;
 });

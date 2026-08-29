@@ -7,11 +7,20 @@
 
 import * as THREE from '../../vendor/three.module.js';
 import { Entity } from './entity.js';
-import { W_LAYERS, W_MID, WORLD_H, SEA_LEVEL } from '../world/constants.js';
-import { B, IS_SOLID } from '../world/blocks.js';
-import { clamp, damp } from '../core/mathx.js';
+import { W_LAYERS } from '../world/constants.js';
+import { IS_SOLID } from '../world/blocks.js';
+import { clamp, damp, yawForwardX, yawForwardZ, yawToward } from '../core/mathx.js';
 
 const P = (sx, sy, sz, x, y, z, color, role) => ({ s: [sx, sy, sz], p: [x, y, z], c: color, role: role || null });
+
+/**
+ * Species tables were authored against a coarse fourth axis; W is now fine
+ * grained, so a body that used to span 1.5 layers has to span proportionally
+ * more of them to keep the same physical thickness in the hyperworld.
+ */
+export const W_FINE = 4.4;
+/** How far along W a layer-bound (3D) creature stays visible. */
+export const MOB_W_RANGE = 2.6;
 
 export const SPECIES = {
   // ---------------- passive, 3D ----------------
@@ -307,7 +316,7 @@ export class Mob extends Entity {
     this.health = s.hp;
     this.speed = s.speed;
     this.flying = !!s.flying;
-    this.hyperExtent = s.hyper || 0;
+    this.hyperExtent = (s.hyper || 0) * W_FINE;
     this.wanderTimer = 0;
     this.targetYaw = Math.random() * Math.PI * 2;
     this.attackCd = 0;
@@ -315,7 +324,7 @@ export class Mob extends Entity {
     this.moving = 0;
     this.anchorW = w;
     this.phaseCd = 0;
-    if (s.dim === 4) this.w = w + (Math.random() - 0.5) * 0.8;
+    if (s.dim === 4) this.w = w + (Math.random() - 0.5) * 0.8 * W_FINE;
     this.buildModel();
   }
 
@@ -363,7 +372,9 @@ export class Mob extends Entity {
     const player = game.player;
     const dist = this.distanceTo(player);
     const dw = Math.abs(this.w - player.w);
-    const sameSlice = this.def.dim === 4 ? dw < (this.hyperExtent + 0.4) : Math.round(this.w) === player.slice;
+    const sameSlice = this.def.dim === 4
+      ? dw < (this.hyperExtent + 0.4)
+      : dw < MOB_W_RANGE * 0.6;
     const s = this.def;
 
     let wantX = 0, wantZ = 0;
@@ -371,16 +382,16 @@ export class Mob extends Entity {
     const aggro = hostile && sameSlice && dist < 22 && !player.dead && player.gameMode !== 'creative';
 
     if (aggro) {
-      const a = Math.atan2(player.x - this.x, player.z - this.z);
+      const a = yawToward(player.x - this.x, player.z - this.z);
       this.targetYaw = a;
-      wantX = Math.sin(a); wantZ = Math.cos(a);
+      wantX = yawForwardX(a); wantZ = yawForwardZ(a);
       if (dist < 1.5 && this.attackCd <= 0 && Math.abs(player.y - this.y) < 2.2) {
         game.hurtPlayer(s.dmg, this);
         this.attackCd = 1.1;
       }
       // hyper-predators cut the corner through the fourth dimension
       if (s.phaseHunter && this.phaseCd <= 0 && dist > 5) {
-        this.wTarget = player.w + (Math.random() < 0.5 ? -1 : 1) * 0.9;
+        this.wTarget = player.w + (Math.random() < 0.5 ? -1 : 1) * 0.9 * W_FINE;
         this.phaseCd = 3.5;
       }
     } else {
@@ -390,19 +401,20 @@ export class Mob extends Entity {
         this.targetYaw = Math.random() * Math.PI * 2;
         this.idle = Math.random() < 0.35;
       }
-      if (!this.idle) { wantX = Math.sin(this.targetYaw); wantZ = Math.cos(this.targetYaw); }
+      if (!this.idle) { wantX = yawForwardX(this.targetYaw); wantZ = yawForwardZ(this.targetYaw); }
       if (s.kind === 'passive' && this.hurtTimer > 0 && dist < 12) {
-        const a = Math.atan2(this.x - player.x, this.z - player.z);
-        wantX = Math.sin(a); wantZ = Math.cos(a);
+        const a = yawToward(this.x - player.x, this.z - player.z);   // flee
+        this.targetYaw = a;
+        wantX = yawForwardX(a); wantZ = yawForwardZ(a);
       }
     }
 
     // hyper drift
     if (s.dim === 4 && !s.anchored) {
       if (this.wTarget === undefined || Math.random() < dt * 0.15) {
-        this.wTarget = clamp(this.anchorW + (Math.random() - 0.5) * 2.4, 0, W_LAYERS - 1);
+        this.wTarget = clamp(this.anchorW + (Math.random() - 0.5) * 2.4 * W_FINE, 0, W_LAYERS - 1);
       }
-      this.w = damp(this.w, clamp(this.wTarget, 0, W_LAYERS - 1), 1.2, dt);
+      this.w = damp(this.w, clamp(this.wTarget, 0, W_LAYERS - 1), 0.9, dt);
     }
 
     const sp = this.speed * (aggro ? 1.25 : 0.55);
@@ -468,9 +480,9 @@ export class Mob extends Entity {
       visible = frac > 0.02;
       opacity = 0.55 + frac * 0.45;
     } else {
-      const a = Math.abs(d);
-      visible = a < 0.98;
-      opacity = clamp(1.25 - a * 1.6, 0, 1);
+      const a = Math.abs(d) / MOB_W_RANGE;
+      visible = a < 1;
+      opacity = clamp(1.35 - a * 1.5, 0, 1);
     }
     this.group.visible = visible;
     if (!visible) return false;

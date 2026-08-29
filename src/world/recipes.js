@@ -5,7 +5,6 @@
 //   tesseract  — the Tesseract Bench: 4x4 x TWO hyper-layers, for 4D gear
 // ---------------------------------------------------------------------------
 
-import { getItem } from './items.js';
 
 export const TAGS = {
   '#planks': ['oak_planks', 'pine_planks', 'rift_planks'],

@@ -6,10 +6,10 @@
 // phase one layer and the hills flow, the coast walks, the cave keeps going.
 // ---------------------------------------------------------------------------
 
-import { CX, CZ, WORLD_H, W_LAYERS, W_MID, SEA_LEVEL, idx, colOffset } from './constants.js';
+import { CX, CZ, WORLD_H, W_MID, W_STEP, SEA_LEVEL, colOffset } from './constants.js';
 import { B } from './blocks.js';
 import { hash4, hash2 } from '../core/rng.js';
-import { clamp, lerp } from '../core/mathx.js';
+import { clamp } from '../core/mathx.js';
 
 export const BIOMES = [
   { key: 'ocean',    name: 'Hollow Sea',     top: B.sand,        soil: B.sand,        rock: B.stone },
@@ -28,7 +28,6 @@ export const BIOMES = [
 export const BIOME_INDEX = {};
 BIOMES.forEach((b, i) => { BIOME_INDEX[b.key] = i; });
 
-const WSCALE = 0.55;   // how fast the world morphs per hyper-layer
 
 export class WorldGen {
   constructor(noise, seed) {
@@ -39,11 +38,11 @@ export class WorldGen {
 
   /** Surface height at a global column, per hyper-layer. */
   heightAt(gx, gz, w) {
-    const key = ((gx & 0xffff) << 16 | (gz & 0xffff)) * 8 + w;
+    const key = ((gx & 0xffff) * 65536 + (gz & 0xffff)) * 64 + w;
     const c = this._hcache.get(key);
     if (c !== undefined) return c;
     const n = this.n;
-    const wf = (w - W_MID) * WSCALE;
+    const wf = (w - W_MID) * W_STEP;
     const cont = n.continent.fbm(gx * 0.0032, 40.5, gz * 0.0032, wf * 0.6 + 5.5, 4);
     const hillAmp = clamp(cont * 1.6 + 0.55, 0.05, 1.4);
     const hills = n.hills.fbm(gx * 0.013, 11.5, gz * 0.013, wf * 0.9 + 1.5, 3);
@@ -58,7 +57,7 @@ export class WorldGen {
 
   climateAt(gx, gz, w) {
     const n = this.n;
-    const wf = (w - W_MID) * WSCALE;
+    const wf = (w - W_MID) * W_STEP;
     const temp = n.temp.fbm(gx * 0.0021, 60.5, gz * 0.0021, wf * 0.5 + 30.5, 3);
     const humid = n.humid.fbm(gx * 0.0026, 80.5, gz * 0.0026, wf * 0.5 + 50.5, 3);
     const strange = n.rift.fbm(gx * 0.0034, 90.5, gz * 0.0034, wf * 1.4 + 70.5, 2);
@@ -85,7 +84,7 @@ export class WorldGen {
   /** Signed cave field: > 0 means "carve". */
   caveAt(gx, gy, gz, w) {
     const n = this.n;
-    const wf = (w - W_MID) * WSCALE;
+    const wf = (w - W_MID) * W_STEP;
     const a = n.cave.noise(gx * 0.028, gy * 0.048, gz * 0.028, wf * 0.85 + 3.5);
     const b = n.cave2.noise(gx * 0.028 + 41.7, gy * 0.048 + 13.1, gz * 0.028 - 27.3, wf * 0.85 + 9.5);
     const tube = 0.017 - (a * a + b * b);
@@ -95,8 +94,8 @@ export class WorldGen {
 
   /** Fill one hyper-slice of one chunk. */
   generateSlice(chunk, w) {
-    const blocks = chunk.blocks;
-    const base = w * CX * CZ * WORLD_H;
+    const sl = chunk.slice(w, true);
+    const blocks = sl.blocks;
     const ox = chunk.cx * CX, oz = chunk.cz * CZ;
 
     for (let lx = 0; lx < CX; lx++) {
@@ -108,7 +107,7 @@ export class WorldGen {
         const biome = BIOMES[bi];
         chunk.setH(lx, lz, w, h);
         chunk.setBiome(lx, lz, w, bi);
-        const col = base + colOffset(lx, lz);
+        const col = colOffset(lx, lz);
 
         const soilDepth = 3 + ((hash2(gx, gz, 7 + w) * 3) | 0);
         for (let y = 0; y < WORLD_H; y++) {
@@ -152,12 +151,12 @@ export class WorldGen {
     }
 
     this._decorate(chunk, w);
-    chunk.markGen(w);
+    sl.gen = true;
   }
 
   _ores(blocks, col, gx, gz, w, h) {
     const n = this.n;
-    const wf = (w - W_MID) * WSCALE;
+    const wf = (w - W_MID) * W_STEP;
     const outer = Math.abs(w - W_MID);
     const top = Math.min(h - 1, WORLD_H - 1);
     for (let y = 1; y <= top; y++) {
