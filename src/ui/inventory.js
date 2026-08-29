@@ -27,6 +27,7 @@ export class InventoryUI {
     this.kind = null;
     this.cursor = null;       // stack carried by the pointer
     this.dragging = false;
+    this.dragFrom = null;     // {el, src, i} the slot a drag started from
     this.hovered = null;
     this.craftA = new Container(GRID * GRID, 'Assembly');
     this.craftB = new Container(GRID * GRID, 'Phase Layer');
@@ -309,13 +310,15 @@ export class InventoryUI {
     stackCol.appendChild(fuelBlock);
     flow.appendChild(stackCol);
 
-    const mid = el('div', 'inv-block');
-    this.flameEl = el('div', 'flame');
-    this.flameEl.appendChild(el('i'));
-    mid.appendChild(this.flameEl);
+    const mid = el('div', 'inv-block smelt-gauges');
+    mid.appendChild(el('div', 'cap', 'Heat'));
     this.progEl = el('div', 'progress-arrow');
     this.progEl.appendChild(el('i'));
     mid.appendChild(this.progEl);
+    this.flameEl = el('div', 'flame');
+    this.flameEl.appendChild(el('i'));
+    mid.appendChild(this.flameEl);
+    mid.appendChild(el('div', 'gauge-cap', 'Fuel burn'));
     flow.appendChild(mid);
 
     const outBlock = el('div', 'inv-block');
@@ -366,6 +369,7 @@ export class InventoryUI {
       } else if (cur) {
         this.cursor = src.removeAt(i, cur.count);
         this.dragging = true;
+        this.dragFrom = { el: s, src, i };
       }
     }
     sfx.click();
@@ -373,10 +377,16 @@ export class InventoryUI {
   }
 
   onSlotUp(e, s) {
+    const from = this.dragFrom;
+    this.dragFrom = null;
     if (!this.dragging || !this.cursor) { this.dragging = false; return; }
     this.dragging = false;
     const src = s._source, i = s._index;
     if (!src || src === this.result) return;
+    // Released on the slot the drag began in: this was a click, not a drag, so
+    // keep carrying the stack the way Minecraft does.
+    if (from && from.src === src && from.i === i) return;
+
     const cur = src.get(i);
     if (cur === null) {
       if (this.slotAccepts(s, this.cursor)) { src.set(i, this.cursor); this.cursor = null; }
@@ -386,7 +396,16 @@ export class InventoryUI {
       cur.count += take; this.cursor.count -= take;
       if (this.cursor.count <= 0) this.cursor = null;
     } else if (this.slotAccepts(s, this.cursor)) {
-      src.set(i, this.cursor); this.cursor = cloneStack(cur);
+      const displaced = cloneStack(cur);
+      src.set(i, this.cursor);
+      // A real drag swaps the two slots outright; only a click-carry leaves the
+      // displaced stack on the cursor.
+      if (from && !from.src.get(from.i) && this.slotAccepts(from.el, displaced)) {
+        from.src.set(from.i, displaced);
+        this.cursor = null;
+      } else {
+        this.cursor = displaced;
+      }
     }
     this.afterChange();
   }
@@ -415,7 +434,7 @@ export class InventoryUI {
     }
   }
 
-  onPointerUp() { this.dragging = false; }
+  onPointerUp() { this.dragging = false; this.dragFrom = null; }
 
   dropCursorToWorld(single) {
     if (!this.cursor) return;
@@ -571,7 +590,7 @@ export class InventoryUI {
     }
     if (this.kind === 'smelter' && this.container) {
       const c = this.container;
-      this.flameEl.firstChild.style.height = `${Math.round((c.burn > 0 ? c.burn / Math.max(1, c.burnMax) : 0) * 100)}%`;
+      this.flameEl.firstChild.style.width = `${Math.round((c.burn > 0 ? c.burn / Math.max(1, c.burnMax) : 0) * 100)}%`;
       this.progEl.firstChild.style.width = `${Math.round((c.cook || 0) * 100)}%`;
     }
   }

@@ -137,6 +137,7 @@ lighting and crafting can be exercised in plain Node.
 ```bash
 python3 -m http.server 8123 &      # the suites drive a real browser
 node test/functional.mjs           # world, crafting, mobs, lighting, phasing
+node test/inventory.mjs            # dragging, splitting, quick-move, crafting
 node test/persistence.mjs          # save/load round trip + input handling
 node test/interaction.mjs          # real mouse & keyboard: mine, place, phase
 ```

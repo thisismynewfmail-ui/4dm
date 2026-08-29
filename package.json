@@ -7,7 +7,7 @@
   "scripts": {
     "start": "python3 -m http.server 8000",
     "serve:test": "python3 -m http.server 8123",
-    "test": "node test/functional.mjs && node test/persistence.mjs && node test/interaction.mjs"
+    "test": "node test/functional.mjs && node test/inventory.mjs && node test/persistence.mjs && node test/interaction.mjs"
   },
   "devDependencies": {
     "playwright": "^1.56.0"
