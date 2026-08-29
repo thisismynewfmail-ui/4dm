@@ -1,0 +1,15 @@
+{
+  "name": "4d-mc",
+  "version": "1.0.0",
+  "description": "A first-person voxel sandbox on a genuinely four-dimensional grid.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "serve:test": "python3 -m http.server 8123",
+    "test": "node test/functional.mjs && node test/persistence.mjs && node test/interaction.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0"
+  }
+}
