@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>4D-MC</title>
+<link rel="stylesheet" href="styles/main.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%23131826'/><rect x='4' y='4' width='16' height='16' fill='none' stroke='%236ee7ff' stroke-width='2'/><rect x='12' y='12' width='16' height='16' fill='none' stroke='%23ffc46b' stroke-width='2'/></svg>">
+</head>
+<body>
+<div id="app">
+  <canvas id="game"></canvas>
+
+  <!-- ==================== HUD ==================== -->
+  <div id="hud" class="hidden">
+    <div id="crosshair"></div>
+
+    <div id="telemetry" class="panel-glass">
+      <div class="tele-row"><span class="tele-k">POS</span><span class="tele-v" id="tele-pos">0 0 0</span></div>
+      <div class="tele-row"><span class="tele-k">LAYER</span><span class="tele-v accent-cyan" id="tele-layer">ORIGIN</span></div>
+      <div class="tele-row"><span class="tele-k">BIOME</span><span class="tele-v" id="tele-biome">—</span></div>
+      <div class="tele-row"><span class="tele-k">CLOCK</span><span class="tele-v" id="tele-clock">06:00</span></div>
+    </div>
+
+    <div id="vitals">
+      <div class="meter" data-kind="health">
+        <div class="meter-label">VIT</div>
+        <div class="meter-track"><div class="meter-fill" id="m-health"></div><div class="meter-chevrons"></div></div>
+        <div class="meter-num" id="n-health">20</div>
+      </div>
+      <div class="meter" data-kind="food">
+        <div class="meter-label">SUS</div>
+        <div class="meter-track"><div class="meter-fill" id="m-food"></div><div class="meter-chevrons"></div></div>
+        <div class="meter-num" id="n-food">20</div>
+      </div>
+      <div class="meter" data-kind="phase">
+        <div class="meter-label">PHS</div>
+        <div class="meter-track"><div class="meter-fill" id="m-phase"></div><div class="meter-chevrons"></div></div>
+        <div class="meter-num" id="n-phase">100</div>
+      </div>
+      <div class="meter meter-air hidden" data-kind="air">
+        <div class="meter-label">AIR</div>
+        <div class="meter-track"><div class="meter-fill" id="m-air"></div><div class="meter-chevrons"></div></div>
+        <div class="meter-num" id="n-air">10</div>
+      </div>
+    </div>
+
+    <div id="hotbar-wrap">
+      <div id="held-name"></div>
+      <div id="hotbar"></div>
+    </div>
+
+    <div id="slice-compass">
+      <canvas id="compass-canvas" width="260" height="260"></canvas>
+      <div id="compass-label">ORIGIN</div>
+      <div id="compass-hint">HOLD <b>F</b> + MOUSE</div>
+    </div>
+
+    <div id="toasts"></div>
+    <div id="hit-vignette"></div>
+    <div id="phase-vignette"></div>
+    <div id="debug" class="panel-glass hidden"></div>
+    <div id="interact-prompt" class="hidden"></div>
+  </div>
+
+  <!-- ==================== Overlays ==================== -->
+  <div id="overlay"></div>
+  <div id="loading" class="hidden">
+    <div class="load-inner">
+      <div class="load-title">4D<span class="dot">·</span>MC</div>
+      <div class="load-bar"><div class="load-fill" id="load-fill"></div></div>
+      <div class="load-status" id="load-status">Folding space…</div>
+      <div class="load-tip" id="load-tip"></div>
+    </div>
+  </div>
+</div>
+<script type="module" src="src/main.js"></script>
+<noscript><p style="color:#fff;font:16px monospace;padding:2rem">4D-MC needs JavaScript and WebGL2.</p></noscript>
+</body>
+</html>
