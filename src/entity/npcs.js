@@ -21,6 +21,10 @@ import { RNG } from '../core/rng.js';
 
 /** How far along W the layer-folk stay visible. */
 export const NPC_W_RANGE = 2.6;
+/** Model units to blocks. A core authored at 1.0 stands a little over 2 high. */
+const BODY_SCALE = 1.7;
+/** Orbits shrink as the body grows, so the shards stay read as a halo. */
+const ORBIT_TIGHTEN = 0.84;
 
 const FOLD = ['Threefold', 'Ninefold', 'Sixfold', 'Twicecut', 'Half-Seen', 'Unfolded',
   'Everturning', 'Thinly-Here', 'Fourfold', 'Once-Whole', 'Sevenfold', 'Bent'];
@@ -319,7 +323,7 @@ export class NPC extends Entity {
     const rng = new RNG(seed || `${x}:${z}:${w}:${profKey}`);
     this.prof = profKey;
     this.def = PROFESSIONS[profKey];
-    this.width = 0.8; this.height = 1.7;
+    this.width = 0.9; this.height = 2.0;    // matches the built silhouette
     this.maxHealth = 30; this.health = 30;
     this.speed = 1.1;
     this.gravity = 0;                       // the Fold-Kin do not fall
@@ -336,9 +340,11 @@ export class NPC extends Entity {
 
   buildModel() {
     this.group = new THREE.Group();
-    // authored around a unit core; scaled up so a Fold-Kin reads as a presence
-    // rather than a trinket when you stand next to one
-    this.group.scale.setScalar(1.35);
+    // Authored around a unit core, then scaled up: a Fold-Kin has to read as a
+    // presence across a field, not as a trinket on the ground. The orbits are
+    // pulled in as the body grows so the silhouette stays a body with shards
+    // around it rather than a cloud with a speck at the centre.
+    this.group.scale.setScalar(BODY_SCALE);
     this.materials = [];
     this.shards = [];
     const cache = new Map();
@@ -425,7 +431,7 @@ export class NPC extends Entity {
     for (const sh of this.shards) {
       const r = sh.ring;
       const a = sh.base + t * r.speed;
-      const rad = r.r + (r.wobble ? Math.sin(t * 0.8 + sh.i) * r.wobble * 0.2 : 0);
+      const rad = r.r * ORBIT_TIGHTEN + (r.wobble ? Math.sin(t * 0.8 + sh.i) * r.wobble * 0.2 : 0);
       let px = Math.cos(a) * rad;
       let pz = Math.sin(a) * rad;
       let py = r.y + (r.wobble ? Math.sin(t * 1.3 + sh.i * 1.7) * r.wobble : 0);

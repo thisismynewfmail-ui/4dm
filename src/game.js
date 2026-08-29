@@ -912,13 +912,11 @@ export class Game {
     }
 
     // --- world streaming ---------------------------------------------------
-    // Changing hyper-layer means a whole new set of meshes, so give the builder
-    // a burst of budget and pull the fog in while it catches up. Holding F
-    // pre-builds the neighbouring layers at full range, which is both what the
-    // ghost view wants to draw and what makes the commit instant.
-    // A slab covers several layers, so most travel needs no work at all; a
-    // rebuild only lands when the slab re-centres, and the fog closes in while
-    // the builder catches up so the horizon thickens instead of showing holes.
+    // Travel crosses into a new pair of layers every notch, so the builder gets
+    // a wider budget for as long as its queue is non-empty, and the fog pulls in
+    // while it catches up. A chunk that has neither layer of the pair keeps
+    // drawing its nearest built one, so the horizon goes stale for a moment
+    // instead of opening a hole.
     this.terrain.update(p.x, p.z, p.w, {
       renderDistance: this.settings.renderDistance,
     }, this.paused ? 1 : (this.terrain.settling ? 12 : 5));

@@ -27,7 +27,10 @@ uniform float uPhase;
 void main() {
   float h = vDir.y;
   vec3 c = mix(uHorizon, uTop, clamp(pow(max(h, 0.0), 0.42), 0.0, 1.0));
-  c = mix(c, uGround, clamp(-h * 3.0, 0.0, 1.0));
+  // Below the horizon the dome has to hand off to the terrain's own fog, so
+  // it leaves the horizon colour slowly and only then settles into ground
+  // shadow — a hard step here reads as a wall at the render distance.
+  c = mix(c, uGround, clamp(pow(max(-h, 0.0), 0.75) * 1.35, 0.0, 1.0));
   float sd = max(dot(normalize(vDir), normalize(uSunDir)), 0.0);
   c += uSunColor * pow(sd, 8.0) * 0.5;
   c += uSunColor * pow(sd, 220.0) * 2.2;
@@ -135,7 +138,7 @@ export class Sky {
 
     this.uniforms.uTop.value.copy(sky).multiplyScalar(0.82);
     this.uniforms.uHorizon.value.copy(horizon);
-    this.uniforms.uGround.value.copy(fog).multiplyScalar(0.35);
+    this.uniforms.uGround.value.copy(fog).multiplyScalar(0.55);
     this.uniforms.uSunDir.value.copy(sunDir);
     this.uniforms.uSunColor.value.setRGB(1, 0.94, 0.78).multiplyScalar(0.35 + daylight * 0.65);
     this.uniforms.uNight.value = night;
